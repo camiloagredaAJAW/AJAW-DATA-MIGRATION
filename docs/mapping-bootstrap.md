@@ -46,7 +46,8 @@ Safe to rerun — already-applied migrations are skipped.
 Loads the committed 832-row deduced dataset
 (`references/leads-mapping/field-mappings.deduced.json`) into
 `field_mappings`. Only needed once, on a fresh database — rerunning is
-idempotent and will not duplicate rows or overwrite admin-edited rows:
+idempotent and will not duplicate rows or overwrite any existing row
+(seed, bootstrap, or admin-edited alike):
 
 ```bash
 npm run seed
@@ -54,26 +55,31 @@ npm run seed
 
 ## Refreshing from the live Leads DB
 
-Re-samples the live Leads DB to discover new tables and re-deduce mappings
-for columns not already protected by an admin edit. This hits the network
-and is opt-in — the CLI requires an explicit `--refresh` flag before it will
-sample:
+Re-samples the live Leads DB to discover genuinely new
+`source_db`/`source_table`/`source_column` combinations and deduce mappings
+for them. This hits the network and is opt-in — the CLI requires an explicit
+`--refresh` flag before it will sample:
 
 ```bash
 npm run refresh
 ```
 
 This runs `refresh-catalog` (updates `source_catalog` from `/dbs`) followed
-by `sample --refresh` (samples up to 3 rows per table and re-deduces
-`field_mappings`). To target a single table instead of the whole catalog,
-call the CLI directly:
+by `sample --refresh` (samples up to 3 rows per table and deduces mappings
+for any column combination not already present in `field_mappings`). To
+target a single table instead of the whole catalog, call the CLI directly:
 
 ```bash
 npx tsx src/cli/bootstrap.ts sample --refresh --db ar --table companies
 ```
 
-Rows whose `origin` is `admin` (edited via the API) are never overwritten by
-a rerun of `seed`, `refresh-catalog`, or `sample`.
+Any `field_mappings` row that already exists for a given
+`(source_db, source_table, source_column)` is left untouched by a rerun of
+`seed`, `refresh-catalog`, or `sample` — regardless of its `origin`
+(`seed`, `bootstrap`, or `admin`). Rerunning only ever inserts rows for
+combinations that don't exist yet; it never updates or re-deduces an
+existing one. To intentionally change a mapping, edit it via the API (which
+sets `origin=admin` on that row).
 
 ## Running the API server
 
