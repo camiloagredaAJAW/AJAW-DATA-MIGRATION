@@ -47,7 +47,7 @@ describe("upsertFieldMapping", () => {
     expect(row?.origin).toBe("bootstrap");
   });
 
-  it("updates an existing non-admin row on rerun", () => {
+  it("does not update an existing bootstrap-origin row on rerun (protects it just like admin rows)", () => {
     const db = freshDb();
     upsertFieldMapping(db, {
       sourceDb: "ar",
@@ -73,10 +73,52 @@ describe("upsertFieldMapping", () => {
       origin: "bootstrap",
     });
 
-    expect(result.applied).toBe(true);
+    expect(result.applied).toBe(false);
     const row = readRow(db, "legal_name");
-    expect(row?.destination_field).toBe("title");
-    expect(row?.confidence).toBe("high");
+    expect(row?.destination_field).toBeNull();
+    expect(row?.confidence).toBe("low");
+  });
+
+  it("does not update an existing seed-origin row when a later refresh/reseed would deduce a different value (regression: cadastur.tipo / co_prov.razon / ec.region class of bug)", () => {
+    const db = freshDb();
+    // Simulates the committed seed dataset's per-table-context override, which
+    // deduce()'s column-name-only heuristic cannot reproduce on a later
+    // refresh/reseed run.
+    upsertFieldMapping(db, {
+      sourceDb: "cadastur",
+      sourceTable: "cadastur",
+      sourceColumn: "tipo",
+      destinationDomain: "AiSearchResults",
+      destinationField: "categoryName",
+      additionalInfoKey: null,
+      confidence: "high",
+      note: null,
+      origin: "seed",
+    });
+
+    // A refresh/reseed rerun re-deduces this column using only column-name
+    // heuristics (no table context) and would produce a different, generic
+    // value for this particular table.
+    const result = upsertFieldMapping(db, {
+      sourceDb: "cadastur",
+      sourceTable: "cadastur",
+      sourceColumn: "tipo",
+      destinationDomain: "AiSearchResults",
+      destinationField: "additionalInfo",
+      additionalInfoKey: null,
+      confidence: "low",
+      note: null,
+      origin: "bootstrap",
+    });
+
+    expect(result.applied).toBe(false);
+    const row = db
+      .prepare(
+        `SELECT * FROM field_mappings WHERE source_db = ? AND source_table = ? AND source_column = ?`,
+      )
+      .get("cadastur", "cadastur", "tipo") as Record<string, unknown> | undefined;
+    expect(row?.destination_field).toBe("categoryName");
+    expect(row?.origin).toBe("seed");
   });
 
   it("skips a row owned by an admin edit and reports it as not applied", () => {

@@ -17,8 +17,9 @@ export interface UpsertFieldMappingInput {
 
 export interface UpsertFieldMappingResult {
   /**
-   * true when the row was inserted or updated; false when an existing row
-   * was skipped because it is owned by an admin edit (origin = 'admin').
+   * true when the row was newly inserted; false when a row for this
+   * (source_db, source_table, source_column) triple already existed and was
+   * left untouched, regardless of its origin.
    */
   readonly applied: boolean;
 }
@@ -30,24 +31,26 @@ const UPSERT_SQL = `
   VALUES
     (@sourceDb, @sourceTable, @sourceColumn, @destinationDomain, @destinationField,
      @additionalInfoKey, @confidence, @note, @origin, @createdAt, @updatedAt)
-  ON CONFLICT(source_db, source_table, source_column) DO UPDATE SET
-    destination_domain = excluded.destination_domain,
-    destination_field = excluded.destination_field,
-    additional_info_key = excluded.additional_info_key,
-    confidence = excluded.confidence,
-    note = excluded.note,
-    updated_at = excluded.updated_at
-  WHERE field_mappings.origin != 'admin'
+  ON CONFLICT(source_db, source_table, source_column) DO NOTHING
 `;
 
 /**
- * Inserts a field_mappings row, or updates it in place on a
- * (source_db, source_table, source_column) conflict — UNLESS the existing
- * row's origin is 'admin', in which case the UPDATE clause's WHERE guard
- * prevents any change and no row is inserted (it already exists). This is
- * the single place admin-edit protection is enforced; both the seed loader
- * and the live-sampling CLI path go through this function so the rule can
- * never be bypassed by one caller and not the other.
+ * Inserts a field_mappings row for a brand-new (source_db, source_table,
+ * source_column) triple. On conflict — i.e. a row for that triple already
+ * exists — the INSERT is a no-op regardless of the existing row's origin.
+ *
+ * This is intentional, not just an admin-edit guard: seed/bootstrap-origin
+ * rows can encode curation that a later, context-free `deduce()` re-run
+ * cannot reproduce (e.g. a per-table override the column-name-only
+ * heuristic doesn't know about). Re-running the seed loader or the CLI's
+ * `sample --refresh` must therefore only ever INSERT genuinely new triples,
+ * never UPDATE an existing one — admin, seed, and bootstrap rows are all
+ * equally protected once they exist. Intentionally re-deducing an existing
+ * row is a separate, explicit operation this function does not perform.
+ *
+ * This is the single place that protection is enforced; both the seed
+ * loader and the live-sampling CLI path go through this function so the
+ * rule can never be bypassed by one caller and not the other.
  */
 export function upsertFieldMapping(
   db: Database.Database,

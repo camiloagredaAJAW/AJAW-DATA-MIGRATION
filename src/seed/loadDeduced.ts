@@ -55,9 +55,13 @@ export interface LoadDeducedSeedResult {
 
 /**
  * Loads the committed 832-row deduced dataset into field_mappings with
- * origin='seed'. Idempotent: reruns UPSERT through the shared mappingRepo,
- * so a row an admin has since edited (origin='admin') is never overwritten,
- * and rerunning against an already-seeded database does not duplicate rows.
+ * origin='seed'. Idempotent: reruns go through the shared mappingRepo, which
+ * only ever INSERTs a genuinely new (source_db, source_table, source_column)
+ * triple — an existing row for that triple, whatever its origin, is never
+ * overwritten. This protects not just admin edits but also curated
+ * seed/bootstrap rows that a later reseed's data can't necessarily reproduce,
+ * and it means rerunning against an already-seeded database does not
+ * duplicate rows.
  */
 export function loadDeducedSeed(db: Database.Database, jsonPath: string): LoadDeducedSeedResult {
   const json = readFileSync(jsonPath, "utf-8");
