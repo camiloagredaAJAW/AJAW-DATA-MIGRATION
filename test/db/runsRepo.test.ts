@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { migrate } from "../../src/db/migrate.js";
-import { createRun, updateRunStatus } from "../../src/db/runsRepo.js";
+import { createRun, updateRunStatus, getActiveRun } from "../../src/db/runsRepo.js";
 
 const migrationsDir = path.join(process.cwd(), "src", "migrations");
 
@@ -59,5 +59,53 @@ describe("updateRunStatus", () => {
     expect(() => updateRunStatus(db, run.id, "bogus" as never)).toThrowError(
       /CHECK constraint failed/,
     );
+  });
+});
+
+describe("getActiveRun", () => {
+  it("returns null when no run has ever been created", () => {
+    const db = freshDb();
+
+    expect(getActiveRun(db)).toBeNull();
+  });
+
+  it("returns the run when its status is running", () => {
+    const db = freshDb();
+    const run = createRun(db);
+
+    const active = getActiveRun(db);
+
+    expect(active?.id).toBe(run.id);
+    expect(active?.status).toBe("running");
+  });
+
+  it("returns the run when its status is paused", () => {
+    const db = freshDb();
+    const run = createRun(db);
+    updateRunStatus(db, run.id, "paused");
+
+    const active = getActiveRun(db);
+
+    expect(active?.id).toBe(run.id);
+    expect(active?.status).toBe("paused");
+  });
+
+  it("returns null when the most recent run is completed, stopped, or failed", () => {
+    const db = freshDb();
+    const run = createRun(db);
+    updateRunStatus(db, run.id, "completed");
+
+    expect(getActiveRun(db)).toBeNull();
+  });
+
+  it("returns the most recent active run when multiple runs exist", () => {
+    const db = freshDb();
+    const first = createRun(db);
+    updateRunStatus(db, first.id, "stopped");
+    const second = createRun(db);
+
+    const active = getActiveRun(db);
+
+    expect(active?.id).toBe(second.id);
   });
 });

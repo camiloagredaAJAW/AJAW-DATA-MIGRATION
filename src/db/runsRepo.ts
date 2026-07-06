@@ -24,6 +24,21 @@ export function getRunById(db: Database.Database, id: number): MigrationRunRow |
 }
 
 /**
+ * Reads the most recent migration_runs row whose status is 'running' or
+ * 'paused' (both count as "active" for concurrency purposes — see the
+ * migration-controls spec), or null if none exists.
+ */
+export function getActiveRun(db: Database.Database): MigrationRunRow | null {
+  const row = db
+    .prepare(
+      `SELECT * FROM migration_runs WHERE status IN ('running', 'paused') ORDER BY id DESC LIMIT 1`,
+    )
+    .get() as Record<string, unknown> | undefined;
+
+  return row === undefined ? null : mapSqlRowToMigrationRunRow(row);
+}
+
+/**
  * Creates a new migration_runs row with status='running' and returns it.
  * Each CLI invocation of the engine starts exactly one run.
  */

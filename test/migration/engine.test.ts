@@ -2,9 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { migrate } from "../../src/db/migrate.js";
-import { createRun } from "../../src/db/runsRepo.js";
+import { createRun, getRunById, updateRunStatus } from "../../src/db/runsRepo.js";
 import { getByRunCountry, upsertCheckpoint, advanceOffset, setAiSearchId } from "../../src/db/checkpointRepo.js";
-import { runMigration, type MigrationEngineDeps } from "../../src/migration/engine.js";
+import { runMigration, type MigrationEngineDeps, type ControlSignal } from "../../src/migration/engine.js";
+import type { MigrationRunStatus } from "../../src/db/runsRepo.js";
 import type { AxelorConfig } from "../../src/config/env.js";
 import type { LeadsClientConfig } from "../../src/leads/leadsClient.js";
 import type { AxelorSessionClient } from "../../src/axelor/sessionClient.js";
@@ -85,6 +86,22 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
 
 function jsonLine(row: Record<string, unknown>): string {
   return JSON.stringify(row);
+}
+
+/**
+ * A fake ControlSignal that reports 'running' for the first `pausedAfterCalls`
+ * polls, then reports `haltStatus` forever after. The engine polls once at
+ * the top of the page loop, then once per record — so callers can precisely
+ * control which record boundary triggers the halt.
+ */
+function fakeControlSignal(pausedAfterCalls: number, haltStatus: MigrationRunStatus): ControlSignal {
+  let calls = 0;
+  return {
+    state(): MigrationRunStatus {
+      calls += 1;
+      return calls > pausedAfterCalls ? haltStatus : "running";
+    },
+  };
 }
 
 describe("runMigration", () => {
@@ -307,5 +324,98 @@ describe("runMigration", () => {
     const summary = await runMigration(deps);
 
     expect(summary.countries.map((c) => c.countryCode).sort()).toEqual(["AR", "BO"]);
+  });
+
+  it("halts mid-page on a paused ControlSignal: finishes the in-flight record, does not start the next, and leaves the checkpoint offset unchanged", async () => {
+    const db = freshDb();
+    seedCatalog(db, ["AR"]);
+    seedTitleMapping(db, "AR");
+
+    const leadsFetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        textResponse(
+          `${jsonLine({ legal_name: "ACME" })}\n${jsonLine({ legal_name: "OTHER" })}`,
+        ),
+      );
+
+    const axelorFetchImpl = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith(".AiSearch")) {
+        return jsonResponse({ status: 0, data: [{ id: 100 }] });
+      }
+      return jsonResponse({ status: 0, data: [{ id: 200 }] });
+    });
+
+    const run = createRun(db);
+    // Polls: 1) top of page loop, 2) before record 0, 3) before record 1.
+    // Report 'running' for the first two polls (page loop + record 0), then
+    // 'paused' — so record 0 finishes but record 1 never starts.
+    const controlSignal = fakeControlSignal(2, "paused");
+
+    const deps: MigrationEngineDeps = {
+      db,
+      leadsConfig: leadsConfig(leadsFetchImpl as unknown as typeof fetch),
+      axelorConfig: axelorConfig(),
+      pageLimit: 100,
+      session: fakeSession(),
+      fetchImpl: axelorFetchImpl as unknown as typeof fetch,
+      countries: ["AR"],
+      runId: run.id,
+      controlSignal,
+    };
+
+    const summary = await runMigration(deps);
+
+    const countrySummary = summary.countries.find((c) => c.countryCode === "AR");
+    expect(countrySummary?.processedCount).toBe(1);
+    expect(countrySummary?.halted).toBe(true);
+
+    const checkpoint = getByRunCountry(db, run.id, "AR");
+    expect(checkpoint?.lastOffset).toBe(0);
+    expect(checkpoint?.status).not.toBe("completed");
+    expect(checkpoint?.status).not.toBe("failed");
+  });
+
+  it("does not overwrite migration_runs.status to 'completed' when the run was halted (paused/stopped)", async () => {
+    const db = freshDb();
+    seedCatalog(db, ["AR"]);
+    seedTitleMapping(db, "AR");
+
+    const leadsFetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        textResponse(
+          `${jsonLine({ legal_name: "ACME" })}\n${jsonLine({ legal_name: "OTHER" })}`,
+        ),
+      );
+
+    const axelorFetchImpl = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith(".AiSearch")) {
+        return jsonResponse({ status: 0, data: [{ id: 100 }] });
+      }
+      return jsonResponse({ status: 0, data: [{ id: 200 }] });
+    });
+
+    const run = createRun(db);
+    // Simulates the /pause route already having flipped the DB status before
+    // the engine notices via its next poll.
+    updateRunStatus(db, run.id, "paused");
+    const controlSignal = fakeControlSignal(0, "paused");
+
+    const deps: MigrationEngineDeps = {
+      db,
+      leadsConfig: leadsConfig(leadsFetchImpl as unknown as typeof fetch),
+      axelorConfig: axelorConfig(),
+      pageLimit: 100,
+      session: fakeSession(),
+      fetchImpl: axelorFetchImpl as unknown as typeof fetch,
+      countries: ["AR"],
+      runId: run.id,
+      controlSignal,
+    };
+
+    await runMigration(deps);
+
+    expect(getRunById(db, run.id)?.status).toBe("paused");
   });
 });
