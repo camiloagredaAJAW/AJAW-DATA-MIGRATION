@@ -129,7 +129,7 @@ La búsqueda avanzada también soporta `criteria` anidados con operadores como `
 curl --location --request PUT 'https://salesai-dev.ajawmrp.com/ws/rest/com.ajawmrp3.apps.prospectingai.db.AiSearch' \
 --header 'Content-Type: application/json' \
 --header 'Authorization: Basic <base64(AXELOR_USERNAME:AXELOR_PASSWORD)>' \
---header 'Cookie: CSRF-TOKEN=<csrf-token> JSESSIONID=<session-id>; TENANTID=<tenant-id>' \
+--header 'Cookie: CSRF-TOKEN=<csrf-token>; JSESSIONID=<session-id>; TENANTID=<tenant-id>' \
 --data '{
   "data": {
         "statusSelect": "1",
@@ -181,7 +181,7 @@ Tener en cuenta que el `data.id` se debe obtener para usarlo en la petición de 
 curl --location --request PUT 'https://salesai-dev.ajawmrp.com/ws/rest/com.ajawmrp3.apps.prospectingai.db.AiSearchResults' \
 --header 'Content-Type: application/json' \
 --header 'Authorization: Basic <base64(AXELOR_USERNAME:AXELOR_PASSWORD)>' \
---header 'Cookie: CSRF-TOKEN=<csrf-token> JSESSIONID=<session-id>; TENANTID=<tenant-id>' \
+--header 'Cookie: CSRF-TOKEN=<csrf-token>; JSESSIONID=<session-id>; TENANTID=<tenant-id>' \
 --data '{
   "data": {
         "title": "AESTHETIC MEDICAL CENTER",
