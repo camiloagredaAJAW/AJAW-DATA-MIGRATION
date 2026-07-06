@@ -13,57 +13,59 @@ function freshDb(): Database.Database {
   return db;
 }
 
-function fakeLeadsConfig(databases: Record<string, string[]>): LeadsClientConfig {
+function fakeLeadsConfig(
+  countries: Record<string, unknown>,
+  databases: Record<string, unknown> = {},
+): LeadsClientConfig {
   const fetchImpl = vi.fn().mockResolvedValue({
     ok: true,
     status: 200,
-    json: async () => ({ countries: {}, databases }),
-    text: async () => JSON.stringify({ countries: {}, databases }),
+    json: async () => ({ countries, databases }),
+    text: async () => JSON.stringify({ countries, databases }),
   });
   return {
     baseUrl: "http://leads.example.test",
     dbsPath: "dbs",
-    exportPath: "export",
+    companiesPath: "companies",
     keyValue: "ajaw_live_2026",
     fetchImpl: fetchImpl as unknown as typeof fetch,
   };
 }
 
 describe("runRefreshCatalog", () => {
-  it("records every source_db/source_table pair from /dbs with a fresh timestamp", async () => {
+  it("records every country code from /dbs's countries object as a <code>/companies pair with a fresh timestamp", async () => {
     const db = freshDb();
-    const leadsConfig = fakeLeadsConfig({ ar: ["companies"], ar_sipro: ["sipro"] });
+    const leadsConfig = fakeLeadsConfig({ AR: {}, CO: {} });
 
     const result = await runRefreshCatalog(db, leadsConfig);
 
     expect(result.totalCatalogEntries).toBe(2);
     const rows = db
-      .prepare(`SELECT source_db, source_table, last_sampled_at FROM source_catalog ORDER BY source_db`)
+      .prepare(
+        `SELECT source_db, source_table, last_sampled_at FROM source_catalog ORDER BY source_db`,
+      )
       .all() as { source_db: string; source_table: string; last_sampled_at: string }[];
-    expect(rows.map((r) => `${r.source_db}/${r.source_table}`)).toEqual([
-      "ar/companies",
-      "ar_sipro/sipro",
-    ]);
-    expect(rows.every((r) => typeof r.last_sampled_at === "string" && r.last_sampled_at.length > 0)).toBe(
-      true,
-    );
+    expect(rows.map((r) => `${r.source_db}/${r.source_table}`)).toEqual(["AR/companies", "CO/companies"]);
+    expect(
+      rows.every((r) => typeof r.last_sampled_at === "string" && r.last_sampled_at.length > 0),
+    ).toBe(true);
   });
 
-  it("reports a source_db/source_table pair not previously recorded as new", async () => {
+  it("reports a country not previously recorded as new", async () => {
     const db = freshDb();
     db.prepare(
-      `INSERT INTO source_catalog (source_db, source_table, last_sampled_at) VALUES ('ar', 'companies', '2020-01-01T00:00:00.000Z')`,
+      `INSERT INTO source_catalog (source_db, source_table, last_sampled_at) VALUES ('AR', 'companies', '2020-01-01T00:00:00.000Z')`,
     ).run();
 
-    const leadsConfig = fakeLeadsConfig({ ar: ["companies"], brazil_cnpj: ["contacts"] });
+    const leadsConfig = fakeLeadsConfig({ AR: {}, BR: {} });
     const result = await runRefreshCatalog(db, leadsConfig);
 
-    expect(result.newPairs).toEqual([{ sourceDb: "brazil_cnpj", sourceTable: "contacts" }]);
+    expect(result.newPairs).toEqual([{ sourceDb: "BR", sourceTable: "companies" }]);
   });
 
-  it("refreshes the timestamp of an already-known pair without duplicating it", async () => {
+  it("refreshes the timestamp of an already-known country without duplicating it", async () => {
     const db = freshDb();
-    const leadsConfig = fakeLeadsConfig({ ar: ["companies"] });
+    const leadsConfig = fakeLeadsConfig({ AR: {} });
 
     await runRefreshCatalog(db, leadsConfig);
     await runRefreshCatalog(db, leadsConfig);
@@ -72,5 +74,19 @@ describe("runRefreshCatalog", () => {
       count: number;
     };
     expect(countRow.count).toBe(1);
+  });
+
+  it("ignores the legacy databases object entirely", async () => {
+    const db = freshDb();
+    const leadsConfig = fakeLeadsConfig({ AR: {} }, { ar_sipro: ["sipro"], brazil_cnpj: ["contacts"] });
+
+    const result = await runRefreshCatalog(db, leadsConfig);
+
+    expect(result.totalCatalogEntries).toBe(1);
+    const rows = db.prepare(`SELECT source_db, source_table FROM source_catalog`).all() as {
+      source_db: string;
+      source_table: string;
+    }[];
+    expect(rows).toEqual([{ source_db: "AR", source_table: "companies" }]);
   });
 });

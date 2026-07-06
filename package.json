@@ -11,6 +11,7 @@
     "migrate": "tsx src/cli/bootstrap.ts migrate",
     "seed": "tsx src/cli/bootstrap.ts seed",
     "refresh": "tsx src/cli/bootstrap.ts refresh-catalog && tsx src/cli/bootstrap.ts sample --refresh",
+    "migrate:run": "tsx src/cli/migrate.ts run",
     "dev:api": "tsx src/api/server.ts",
     "test": "vitest run",
     "test:watch": "vitest",
