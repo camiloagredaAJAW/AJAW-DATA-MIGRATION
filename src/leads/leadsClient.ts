@@ -103,6 +103,37 @@ export async function fetchCountrySample(
 }
 
 /**
+ * Fetches one page of company rows for the migration engine's offset loop:
+ * `/companies?country=<CODE>&has_phone=1&has_email=1&format=jsonl&limit=<limit>&offset=<offset>`.
+ * Distinct from `fetchCountrySample`, which is bootstrap-only and always
+ * fixed at `limit=3, offset=0`. The engine (not this function) decides when
+ * a country is exhausted by comparing `rows.length` against `limit`.
+ */
+export async function fetchCompaniesPage(
+  config: LeadsClientConfig,
+  countryCode: string,
+  limit: number,
+  offset: number,
+): Promise<Record<string, unknown>[]> {
+  const url =
+    `${config.baseUrl}/${config.companiesPath}?country=${encodeURIComponent(countryCode)}` +
+    `&has_phone=1&has_email=1&format=jsonl` +
+    `&key=${encodeURIComponent(config.keyValue)}&limit=${limit}&offset=${offset}`;
+  const doFetch = resolveFetch(config);
+
+  return withTimeout(config, async (signal) => {
+    const response = await doFetch(url, { signal });
+    if (!response.ok) {
+      throw new Error(
+        `Leads DB companies request failed for country ${countryCode} with status ${response.status}`,
+      );
+    }
+    const text = await response.text();
+    return parseJsonLines(text);
+  });
+}
+
+/**
  * Samples every given source_catalog pair (`sourceDb` = country code). Each
  * country is fetched independently inside its own try/catch: a slow or
  * failing country is reported in its outcome's `error` field and never
