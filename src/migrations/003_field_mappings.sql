@@ -3,7 +3,7 @@ CREATE TABLE field_mappings (
   source_db TEXT NOT NULL,
   source_table TEXT NOT NULL,
   source_column TEXT NOT NULL,
-  destination_domain TEXT NOT NULL CHECK(destination_domain IN ('AiSearchResults','LinkedinSearchResults')),
+  destination_domain TEXT NOT NULL CHECK(destination_domain IN ('AiSearchResults')),
   destination_field TEXT,
   additional_info_key TEXT,
   transform TEXT REFERENCES sanitization_rules(name),

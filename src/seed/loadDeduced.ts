@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import type Database from "better-sqlite3";
 import type { Confidence, DestinationDomain } from "../deduce/deduce.js";
-import { taxIdAdditionalInfoKey } from "../deduce/deduce.js";
 import { upsertFieldMapping } from "../repos/mappingRepo.js";
 
 export interface DeducedSeedRow {
@@ -10,21 +9,13 @@ export interface DeducedSeedRow {
   readonly source_column: string;
   readonly destination_domain: DestinationDomain;
   readonly destination_field?: string | null;
+  readonly additional_info_key?: string | null;
   readonly confidence?: Confidence | "unmapped";
   readonly note?: string;
 }
 
-/**
- * source_db/source_table pairs excluded from the mapping registry entirely.
- * cr/progress is the scraper's internal progress cursor, not a lead record.
- */
-const EXCLUDED_SOURCE_TABLES: ReadonlySet<string> = new Set(["cr/progress"]);
-
 export function parseDeducedSeedRows(json: string): DeducedSeedRow[] {
-  const rows = JSON.parse(json) as DeducedSeedRow[];
-  return rows.filter(
-    (row) => !EXCLUDED_SOURCE_TABLES.has(`${row.source_db}/${row.source_table}`),
-  );
+  return JSON.parse(json) as DeducedSeedRow[];
 }
 
 /**
@@ -40,11 +31,19 @@ function normalizeConfidence(confidence: DeducedSeedRow["confidence"]): Confiden
   return confidence;
 }
 
+/**
+ * Reads additional_info_key directly from the row's own JSON field. This
+ * MUST NOT be recomputed from any static column-name map: the committed
+ * dataset is curated per-row (e.g. `matricula` in CO carries
+ * `additional_info_key: "sourceRegistrationNumber"`), and a static map can
+ * drift out of sync with that curation or simply omit a column. The JSON's
+ * own value always wins.
+ */
 function deriveAdditionalInfoKey(row: DeducedSeedRow): string | null {
   if ((row.destination_field ?? null) !== "additionalInfo") {
     return null;
   }
-  return taxIdAdditionalInfoKey(row.source_column);
+  return row.additional_info_key ?? null;
 }
 
 export interface LoadDeducedSeedResult {
@@ -54,7 +53,7 @@ export interface LoadDeducedSeedResult {
 }
 
 /**
- * Loads the committed 832-row deduced dataset into field_mappings with
+ * Loads the committed 163-row deduced dataset into field_mappings with
  * origin='seed'. Idempotent: reruns go through the shared mappingRepo, which
  * only ever INSERTs a genuinely new (source_db, source_table, source_column)
  * triple — an existing row for that triple, whatever its origin, is never
