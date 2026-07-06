@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<domain-models xmlns="http://axelor.com/xml/ns/domain-models"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://axelor.com/xml/ns/domain-models http://axelor.com/xml/ns/domain-models/domain-models_6.1.xsd">
+
+  <module package="com.ajawmrp3.apps.prospectingai.db" name="prospectingai"/>
+
+  <entity name="LinkedinSearch">
+    <integer name="statusSelect" selection="prospectingai.linkedinsearch.status.select"
+      default="1" readonly="true" required="true"/>
+    <string name="searchString" title="Search String"/>
+    <long name="resultsNumber" title="resultsNumber" min="0" default="0"/>
+  </entity>
+
+</domain-models>

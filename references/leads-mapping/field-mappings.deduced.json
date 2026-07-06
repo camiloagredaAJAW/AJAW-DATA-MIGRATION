@@ -1,0 +1,1429 @@
+[
+  {
+    "source_db": "BR",
+    "source_table": "companies",
+    "source_column": "activity_code",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "note": "coded activity classification, not human-readable category text"
+  },
+  {
+    "source_db": "BR",
+    "source_table": "companies",
+    "source_column": "address",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "address",
+    "confidence": "high"
+  },
+  {
+    "source_db": "BR",
+    "source_table": "companies",
+    "source_column": "city",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "city",
+    "confidence": "high"
+  },
+  {
+    "source_db": "BR",
+    "source_table": "companies",
+    "source_column": "cnpj",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "additional_info_key": "sourceTaxId",
+    "note": "Preserved as additionalInfo.sourceTaxId - business identifier, no dedicated Axelor field."
+  },
+  {
+    "source_db": "BR",
+    "source_table": "companies",
+    "source_column": "cnpj_basico",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "additional_info_key": "sourceTaxIdRoot",
+    "note": "Preserved as additionalInfo.sourceTaxIdRoot - business identifier, no dedicated Axelor field."
+  },
+  {
+    "source_db": "BR",
+    "source_table": "companies",
+    "source_column": "company_size",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "company size classification, no dedicated field"
+  },
+  {
+    "source_db": "BR",
+    "source_table": "companies",
+    "source_column": "country",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "countryCode",
+    "confidence": "high"
+  },
+  {
+    "source_db": "BR",
+    "source_table": "companies",
+    "source_column": "email",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "email",
+    "confidence": "high"
+  },
+  {
+    "source_db": "BR",
+    "source_table": "companies",
+    "source_column": "legal_form_code",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "legal form classification code"
+  },
+  {
+    "source_db": "BR",
+    "source_table": "companies",
+    "source_column": "legal_name",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "title",
+    "confidence": "high"
+  },
+  {
+    "source_db": "BR",
+    "source_table": "companies",
+    "source_column": "neighborhood",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "neighborhood",
+    "confidence": "high"
+  },
+  {
+    "source_db": "BR",
+    "source_table": "companies",
+    "source_column": "phone",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "phoneUnformatted",
+    "confidence": "high"
+  },
+  {
+    "source_db": "BR",
+    "source_table": "companies",
+    "source_column": "phone2",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "phoneUnformatted",
+    "confidence": "low",
+    "note": "secondary phone line; duplicate candidate alongside the primary phone column"
+  },
+  {
+    "source_db": "BR",
+    "source_table": "companies",
+    "source_column": "porte_code",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "company size classification code (Brazil porte)"
+  },
+  {
+    "source_db": "BR",
+    "source_table": "companies",
+    "source_column": "postal_code",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "postalCode",
+    "confidence": "high"
+  },
+  {
+    "source_db": "BR",
+    "source_table": "companies",
+    "source_column": "sector",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "categoryName",
+    "confidence": "high"
+  },
+  {
+    "source_db": "BR",
+    "source_table": "companies",
+    "source_column": "share_capital",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "registered share capital amount, no dedicated field"
+  },
+  {
+    "source_db": "BR",
+    "source_table": "companies",
+    "source_column": "state",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "state",
+    "confidence": "high"
+  },
+  {
+    "source_db": "BR",
+    "source_table": "companies",
+    "source_column": "status",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "note": "company/registration status text (e.g. ATIVA/CANCELADA/supplier), not a scraping-error state"
+  },
+  {
+    "source_db": "BR",
+    "source_table": "companies",
+    "source_column": "trade_name",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "note": "secondary/trade name, AiSearchResults has only one title field"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "activity_code",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "note": "coded activity classification, not human-readable category text"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "address",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "address",
+    "confidence": "high"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "assets",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "financial statement figure (assets), no dedicated field"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "chamber",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "chamber-of-commerce jurisdiction name"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "company_id",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "additional_info_key": "sourceRecordId",
+    "note": "Preserved as additionalInfo.sourceRecordId - business identifier, no dedicated Axelor field."
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "company_size",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "company size classification, no dedicated field"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "country",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "countryCode",
+    "confidence": "high"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "email",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "email",
+    "confidence": "high"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "equity",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "financial statement figure (equity), no dedicated field"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "hiring_role",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "hiring-signal role text, no dedicated field"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "hiring_sales",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "hiring-signal flag (sales role open), no dedicated field"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "is_supplement",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "boolean enrichment flag, no dedicated field"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "is_tourism",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "boolean enrichment flag, no dedicated field"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "last_renewed",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "last renewal year/date"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "legal_name",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "title",
+    "confidence": "high"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "legal_nature",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "legal nature classification (e.g. PERSONA NATURAL)"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "matricula",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "additional_info_key": "sourceRegistrationNumber",
+    "note": "Preserved as additionalInfo.sourceRegistrationNumber - business identifier, no dedicated Axelor field."
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "net_profit",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "financial statement figure (net profit), no dedicated field"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "osm_email",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "email",
+    "confidence": "low",
+    "note": "OSM cross-reference email; secondary/enrichment candidate"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "osm_match_conf",
+    "destination_domain": "AiSearchResults",
+    "destination_field": null,
+    "confidence": "unmapped",
+    "note": "match-confidence score for OSM cross-reference, metadata only"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "osm_phone",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "phoneUnformatted",
+    "confidence": "low",
+    "note": "OpenStreetMap cross-reference phone; secondary/enrichment candidate"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "osm_phone_landline",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "phoneUnformatted",
+    "confidence": "low",
+    "note": "OSM cross-reference normalized landline phone; duplicate candidate"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "osm_phone_mobile",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "phoneUnformatted",
+    "confidence": "low",
+    "note": "OSM cross-reference normalized mobile phone; duplicate candidate"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "osm_phone_type",
+    "destination_domain": "AiSearchResults",
+    "destination_field": null,
+    "confidence": "unmapped",
+    "note": "phone classification metadata for OSM cross-reference"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "osm_phone_valid",
+    "destination_domain": "AiSearchResults",
+    "destination_field": null,
+    "confidence": "unmapped",
+    "note": "boolean phone-validation flag for OSM cross-reference, metadata only"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "osm_website",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "website",
+    "confidence": "low",
+    "note": "OSM cross-reference website; secondary/enrichment candidate"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "revenue",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "financial statement figure (revenue), no dedicated field"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "secop_contracts",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "government-contracts count signal (SECOP), no dedicated field"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "secop_total",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "government-contracts total value signal (SECOP), no dedicated field"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "sector",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "categoryName",
+    "confidence": "high"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "source",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "data provenance/source system name, useful metadata only"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "source_date",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "data snapshot/extraction date, metadata only"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "status",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "note": "company/registration status text (e.g. ATIVA/CANCELADA/supplier), not a scraping-error state"
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "tax_id",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "additional_info_key": "sourceTaxId",
+    "note": "Preserved as additionalInfo.sourceTaxId - business identifier, no dedicated Axelor field."
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "tax_id_type",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "additional_info_key": "sourceTaxIdType",
+    "note": "Preserved as additionalInfo.sourceTaxIdType - business identifier, no dedicated Axelor field."
+  },
+  {
+    "source_db": "CO",
+    "source_table": "companies",
+    "source_column": "tourism_cat",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "categoryName",
+    "confidence": "low",
+    "note": "tourism category classification, alternate to sector/activity"
+  },
+  {
+    "source_db": "GT",
+    "source_table": "companies",
+    "source_column": "activity_code",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "note": "coded activity classification, not human-readable category text"
+  },
+  {
+    "source_db": "GT",
+    "source_table": "companies",
+    "source_column": "address",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "address",
+    "confidence": "high"
+  },
+  {
+    "source_db": "GT",
+    "source_table": "companies",
+    "source_column": "city",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "city",
+    "confidence": "high"
+  },
+  {
+    "source_db": "GT",
+    "source_table": "companies",
+    "source_column": "company_id",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "additional_info_key": "sourceRecordId",
+    "note": "Preserved as additionalInfo.sourceRecordId - business identifier, no dedicated Axelor field."
+  },
+  {
+    "source_db": "GT",
+    "source_table": "companies",
+    "source_column": "country",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "countryCode",
+    "confidence": "high"
+  },
+  {
+    "source_db": "GT",
+    "source_table": "companies",
+    "source_column": "email",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "email",
+    "confidence": "high"
+  },
+  {
+    "source_db": "GT",
+    "source_table": "companies",
+    "source_column": "legal_name",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "title",
+    "confidence": "high"
+  },
+  {
+    "source_db": "GT",
+    "source_table": "companies",
+    "source_column": "phone",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "phoneUnformatted",
+    "confidence": "high"
+  },
+  {
+    "source_db": "GT",
+    "source_table": "companies",
+    "source_column": "postal_code",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "postalCode",
+    "confidence": "high"
+  },
+  {
+    "source_db": "GT",
+    "source_table": "companies",
+    "source_column": "source",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "data provenance/source system name, useful metadata only"
+  },
+  {
+    "source_db": "GT",
+    "source_table": "companies",
+    "source_column": "source_date",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "data snapshot/extraction date, metadata only"
+  },
+  {
+    "source_db": "GT",
+    "source_table": "companies",
+    "source_column": "state",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "state",
+    "confidence": "high"
+  },
+  {
+    "source_db": "GT",
+    "source_table": "companies",
+    "source_column": "status",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "note": "company/registration status text (e.g. ATIVA/CANCELADA/supplier), not a scraping-error state"
+  },
+  {
+    "source_db": "GT",
+    "source_table": "companies",
+    "source_column": "tax_id",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "additional_info_key": "sourceTaxId",
+    "note": "Preserved as additionalInfo.sourceTaxId - business identifier, no dedicated Axelor field."
+  },
+  {
+    "source_db": "GT",
+    "source_table": "companies",
+    "source_column": "tax_id_type",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "additional_info_key": "sourceTaxIdType",
+    "note": "Preserved as additionalInfo.sourceTaxIdType - business identifier, no dedicated Axelor field."
+  },
+  {
+    "source_db": "GT",
+    "source_table": "companies",
+    "source_column": "trade_name",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "note": "secondary/trade name, AiSearchResults has only one title field"
+  },
+  {
+    "source_db": "GT",
+    "source_table": "companies",
+    "source_column": "website",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "website",
+    "confidence": "high"
+  },
+  {
+    "source_db": "HN",
+    "source_table": "companies",
+    "source_column": "activity_code",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "note": "coded activity classification, not human-readable category text"
+  },
+  {
+    "source_db": "HN",
+    "source_table": "companies",
+    "source_column": "address",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "address",
+    "confidence": "high"
+  },
+  {
+    "source_db": "HN",
+    "source_table": "companies",
+    "source_column": "city",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "city",
+    "confidence": "high"
+  },
+  {
+    "source_db": "HN",
+    "source_table": "companies",
+    "source_column": "company_id",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "additional_info_key": "sourceRecordId",
+    "note": "Preserved as additionalInfo.sourceRecordId - business identifier, no dedicated Axelor field."
+  },
+  {
+    "source_db": "HN",
+    "source_table": "companies",
+    "source_column": "country",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "countryCode",
+    "confidence": "high"
+  },
+  {
+    "source_db": "HN",
+    "source_table": "companies",
+    "source_column": "email",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "email",
+    "confidence": "high"
+  },
+  {
+    "source_db": "HN",
+    "source_table": "companies",
+    "source_column": "legal_name",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "title",
+    "confidence": "high"
+  },
+  {
+    "source_db": "HN",
+    "source_table": "companies",
+    "source_column": "phone",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "phoneUnformatted",
+    "confidence": "high"
+  },
+  {
+    "source_db": "HN",
+    "source_table": "companies",
+    "source_column": "postal_code",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "postalCode",
+    "confidence": "high"
+  },
+  {
+    "source_db": "HN",
+    "source_table": "companies",
+    "source_column": "source",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "data provenance/source system name, useful metadata only"
+  },
+  {
+    "source_db": "HN",
+    "source_table": "companies",
+    "source_column": "source_date",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "data snapshot/extraction date, metadata only"
+  },
+  {
+    "source_db": "HN",
+    "source_table": "companies",
+    "source_column": "state",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "state",
+    "confidence": "high"
+  },
+  {
+    "source_db": "HN",
+    "source_table": "companies",
+    "source_column": "status",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "note": "company/registration status text (e.g. ATIVA/CANCELADA/supplier), not a scraping-error state"
+  },
+  {
+    "source_db": "HN",
+    "source_table": "companies",
+    "source_column": "tax_id",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "additional_info_key": "sourceTaxId",
+    "note": "Preserved as additionalInfo.sourceTaxId - business identifier, no dedicated Axelor field."
+  },
+  {
+    "source_db": "HN",
+    "source_table": "companies",
+    "source_column": "tax_id_type",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "additional_info_key": "sourceTaxIdType",
+    "note": "Preserved as additionalInfo.sourceTaxIdType - business identifier, no dedicated Axelor field."
+  },
+  {
+    "source_db": "HN",
+    "source_table": "companies",
+    "source_column": "trade_name",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "note": "secondary/trade name, AiSearchResults has only one title field"
+  },
+  {
+    "source_db": "HN",
+    "source_table": "companies",
+    "source_column": "website",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "website",
+    "confidence": "high"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "activity_code",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "note": "coded activity classification, not human-readable category text"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "activity_desc",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "categoryName",
+    "confidence": "medium",
+    "note": "human-readable activity description, alternate to sector"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "address",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "address",
+    "confidence": "high"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "city",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "city",
+    "confidence": "high"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "company_id",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "additional_info_key": "sourceRecordId",
+    "note": "Preserved as additionalInfo.sourceRecordId - business identifier, no dedicated Axelor field."
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "confidence",
+    "destination_domain": "AiSearchResults",
+    "destination_field": null,
+    "confidence": "unmapped",
+    "note": "internal match-confidence score/label, metadata only"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "country",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "countryCode",
+    "confidence": "high"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "crawl_email",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "email",
+    "confidence": "low",
+    "note": "web-crawl-derived email; secondary/enrichment candidate"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "crawl_phone",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "phoneUnformatted",
+    "confidence": "low",
+    "note": "web-crawl-derived phone; secondary/enrichment candidate"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "crawl_whatsapp",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "phoneUnformatted",
+    "confidence": "low",
+    "note": "web-crawl-derived WhatsApp number; secondary/enrichment candidate"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "created_at",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "record creation timestamp, metadata only"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "domain",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "note": "raw domain string, distinct from the website column already present"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "email_generic",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "email",
+    "confidence": "medium",
+    "note": "secondary/generic email candidate alongside the primary email column"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "employee_band",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "employee count band, no dedicated field"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "hiring_role",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "hiring-signal role text, no dedicated field"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "hiring_sales",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "hiring-signal flag (sales role open), no dedicated field"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "lat",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "geo-coordinate (latitude); no dedicated lat/lng field"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "legal_name",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "title",
+    "confidence": "high"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "lng",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "geo-coordinate (longitude); no dedicated lat/lng field"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "neighborhood",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "neighborhood",
+    "confidence": "high"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "osm_email",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "email",
+    "confidence": "low",
+    "note": "OSM cross-reference email; secondary/enrichment candidate"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "osm_match_conf",
+    "destination_domain": "AiSearchResults",
+    "destination_field": null,
+    "confidence": "unmapped",
+    "note": "match-confidence score for OSM cross-reference, metadata only"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "osm_phone",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "phoneUnformatted",
+    "confidence": "low",
+    "note": "OpenStreetMap cross-reference phone; secondary/enrichment candidate"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "osm_website",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "website",
+    "confidence": "low",
+    "note": "OSM cross-reference website; secondary/enrichment candidate"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "phone",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "phoneUnformatted",
+    "confidence": "high"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "phone_landline",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "phoneUnformatted",
+    "confidence": "low",
+    "note": "normalized landline phone; duplicate candidate to the primary phone column"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "phone_mobile",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "phoneUnformatted",
+    "confidence": "low",
+    "note": "normalized mobile phone; duplicate candidate to the primary phone column"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "phone_type",
+    "destination_domain": "AiSearchResults",
+    "destination_field": null,
+    "confidence": "unmapped",
+    "note": "phone classification metadata (FIXED/MOBILE/etc.)"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "phone_valid",
+    "destination_domain": "AiSearchResults",
+    "destination_field": null,
+    "confidence": "unmapped",
+    "note": "boolean phone-validation flag, metadata only"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "postal_code",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "postalCode",
+    "confidence": "high"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "sector",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "categoryName",
+    "confidence": "high"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "source",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "data provenance/source system name, useful metadata only"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "source_date",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "data snapshot/extraction date, metadata only"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "state",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "state",
+    "confidence": "high"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "status",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "note": "company/registration status text (e.g. ATIVA/CANCELADA/supplier), not a scraping-error state"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "tax_id",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "additional_info_key": "sourceTaxId",
+    "note": "Preserved as additionalInfo.sourceTaxId - business identifier, no dedicated Axelor field."
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "tax_id_type",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "additional_info_key": "sourceTaxIdType",
+    "note": "Preserved as additionalInfo.sourceTaxIdType - business identifier, no dedicated Axelor field."
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "trade_name",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "note": "secondary/trade name, AiSearchResults has only one title field"
+  },
+  {
+    "source_db": "MX",
+    "source_table": "companies",
+    "source_column": "website",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "website",
+    "confidence": "high"
+  },
+  {
+    "source_db": "PA",
+    "source_table": "companies",
+    "source_column": "activity_code",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "note": "coded activity classification, not human-readable category text"
+  },
+  {
+    "source_db": "PA",
+    "source_table": "companies",
+    "source_column": "address",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "address",
+    "confidence": "high"
+  },
+  {
+    "source_db": "PA",
+    "source_table": "companies",
+    "source_column": "city",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "city",
+    "confidence": "high"
+  },
+  {
+    "source_db": "PA",
+    "source_table": "companies",
+    "source_column": "company_id",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "additional_info_key": "sourceRecordId",
+    "note": "Preserved as additionalInfo.sourceRecordId - business identifier, no dedicated Axelor field."
+  },
+  {
+    "source_db": "PA",
+    "source_table": "companies",
+    "source_column": "country",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "countryCode",
+    "confidence": "high"
+  },
+  {
+    "source_db": "PA",
+    "source_table": "companies",
+    "source_column": "email",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "email",
+    "confidence": "high"
+  },
+  {
+    "source_db": "PA",
+    "source_table": "companies",
+    "source_column": "legal_name",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "title",
+    "confidence": "high"
+  },
+  {
+    "source_db": "PA",
+    "source_table": "companies",
+    "source_column": "phone",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "phoneUnformatted",
+    "confidence": "high"
+  },
+  {
+    "source_db": "PA",
+    "source_table": "companies",
+    "source_column": "postal_code",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "postalCode",
+    "confidence": "high"
+  },
+  {
+    "source_db": "PA",
+    "source_table": "companies",
+    "source_column": "source",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "data provenance/source system name, useful metadata only"
+  },
+  {
+    "source_db": "PA",
+    "source_table": "companies",
+    "source_column": "source_date",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "data snapshot/extraction date, metadata only"
+  },
+  {
+    "source_db": "PA",
+    "source_table": "companies",
+    "source_column": "state",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "state",
+    "confidence": "high"
+  },
+  {
+    "source_db": "PA",
+    "source_table": "companies",
+    "source_column": "status",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "note": "company/registration status text (e.g. ATIVA/CANCELADA/supplier), not a scraping-error state"
+  },
+  {
+    "source_db": "PA",
+    "source_table": "companies",
+    "source_column": "tax_id",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "additional_info_key": "sourceTaxId",
+    "note": "Preserved as additionalInfo.sourceTaxId - business identifier, no dedicated Axelor field."
+  },
+  {
+    "source_db": "PA",
+    "source_table": "companies",
+    "source_column": "tax_id_type",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "additional_info_key": "sourceTaxIdType",
+    "note": "Preserved as additionalInfo.sourceTaxIdType - business identifier, no dedicated Axelor field."
+  },
+  {
+    "source_db": "PA",
+    "source_table": "companies",
+    "source_column": "trade_name",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "note": "secondary/trade name, AiSearchResults has only one title field"
+  },
+  {
+    "source_db": "PA",
+    "source_table": "companies",
+    "source_column": "website",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "website",
+    "confidence": "high"
+  },
+  {
+    "source_db": "UY",
+    "source_table": "companies",
+    "source_column": "activity_code",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "note": "coded activity classification, not human-readable category text"
+  },
+  {
+    "source_db": "UY",
+    "source_table": "companies",
+    "source_column": "address",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "address",
+    "confidence": "high"
+  },
+  {
+    "source_db": "UY",
+    "source_table": "companies",
+    "source_column": "city",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "city",
+    "confidence": "high"
+  },
+  {
+    "source_db": "UY",
+    "source_table": "companies",
+    "source_column": "company_id",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "additional_info_key": "sourceRecordId",
+    "note": "Preserved as additionalInfo.sourceRecordId - business identifier, no dedicated Axelor field."
+  },
+  {
+    "source_db": "UY",
+    "source_table": "companies",
+    "source_column": "country",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "countryCode",
+    "confidence": "high"
+  },
+  {
+    "source_db": "UY",
+    "source_table": "companies",
+    "source_column": "email",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "email",
+    "confidence": "high"
+  },
+  {
+    "source_db": "UY",
+    "source_table": "companies",
+    "source_column": "legal_name",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "title",
+    "confidence": "high"
+  },
+  {
+    "source_db": "UY",
+    "source_table": "companies",
+    "source_column": "phone",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "phoneUnformatted",
+    "confidence": "high"
+  },
+  {
+    "source_db": "UY",
+    "source_table": "companies",
+    "source_column": "postal_code",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "postalCode",
+    "confidence": "high"
+  },
+  {
+    "source_db": "UY",
+    "source_table": "companies",
+    "source_column": "source",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "data provenance/source system name, useful metadata only"
+  },
+  {
+    "source_db": "UY",
+    "source_table": "companies",
+    "source_column": "source_date",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "low",
+    "note": "data snapshot/extraction date, metadata only"
+  },
+  {
+    "source_db": "UY",
+    "source_table": "companies",
+    "source_column": "state",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "state",
+    "confidence": "high"
+  },
+  {
+    "source_db": "UY",
+    "source_table": "companies",
+    "source_column": "status",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "note": "company/registration status text (e.g. ATIVA/CANCELADA/supplier), not a scraping-error state"
+  },
+  {
+    "source_db": "UY",
+    "source_table": "companies",
+    "source_column": "tax_id",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "additional_info_key": "sourceTaxId",
+    "note": "Preserved as additionalInfo.sourceTaxId - business identifier, no dedicated Axelor field."
+  },
+  {
+    "source_db": "UY",
+    "source_table": "companies",
+    "source_column": "tax_id_type",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "additional_info_key": "sourceTaxIdType",
+    "note": "Preserved as additionalInfo.sourceTaxIdType - business identifier, no dedicated Axelor field."
+  },
+  {
+    "source_db": "UY",
+    "source_table": "companies",
+    "source_column": "trade_name",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "additionalInfo",
+    "confidence": "medium",
+    "note": "secondary/trade name, AiSearchResults has only one title field"
+  },
+  {
+    "source_db": "UY",
+    "source_table": "companies",
+    "source_column": "website",
+    "destination_domain": "AiSearchResults",
+    "destination_field": "website",
+    "confidence": "high"
+  }
+]

@@ -5,14 +5,20 @@ import type Database from "better-sqlite3";
 import { openConnection } from "../db/connection.js";
 import { migrate, type MigrateResult } from "../db/migrate.js";
 import { loadDeducedSeed, type LoadDeducedSeedResult } from "../seed/loadDeduced.js";
-import { classifyDomain, deduce } from "../deduce/deduce.js";
+import { deduce, type DestinationDomain } from "../deduce/deduce.js";
 import { upsertFieldMapping } from "../repos/mappingRepo.js";
 import {
   fetchCatalog,
-  sampleTables,
+  sampleCountries,
   type LeadsClientConfig,
   type LeadsCatalogEntry,
 } from "../leads/leadsClient.js";
+
+/**
+ * The Leads DB now only exposes company data — every sampled column deduces
+ * against this single domain unconditionally (see `deduce.ts`).
+ */
+const DESTINATION_DOMAIN: DestinationDomain = "AiSearchResults";
 
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const DEFAULT_MIGRATIONS_DIR = path.join(REPO_ROOT, "src", "migrations");
@@ -92,11 +98,14 @@ export interface SampleRunResult {
 }
 
 /**
- * Re-samples live tables from the catalog (optionally filtered to a single
- * source_db/source_table) and re-runs deduction to UPSERT any new or
- * refreshed columns. Never touches an existing origin='admin' row — that
- * guarantee comes from mappingRepo.upsertFieldMapping, used for every write.
- * A table returning 0 rows is skipped: no rows are created or deleted for it.
+ * Re-samples live countries from the catalog (optionally filtered to a
+ * single source_db/source_table pair — sourceDb is a country code,
+ * sourceTable is always `"companies"`) and re-runs deduction to insert any
+ * genuinely new columns. Never updates a row that already exists for a
+ * given triple — regardless of its origin (admin, seed, or bootstrap) —
+ * that guarantee comes from mappingRepo.upsertFieldMapping, used for every
+ * write. A country returning 0 rows is skipped: no rows are created or
+ * deleted for it.
  */
 export async function runSample(
   db: Database.Database,
@@ -119,7 +128,7 @@ export async function runSample(
     sourceTable: row.source_table,
   }));
 
-  const outcomes = await sampleTables(leadsConfig, pairs, options.limit ?? DEFAULT_SAMPLE_LIMIT);
+  const outcomes = await sampleCountries(leadsConfig, pairs, options.limit ?? DEFAULT_SAMPLE_LIMIT);
 
   let appliedMappings = 0;
   let skippedAdminMappings = 0;
@@ -139,7 +148,6 @@ export async function runSample(
       continue;
     }
 
-    const domain = classifyDomain(outcome.sourceDb);
     const columns = new Set<string>();
     for (const row of outcome.rows) {
       for (const column of Object.keys(row)) {
@@ -148,12 +156,12 @@ export async function runSample(
     }
 
     for (const column of columns) {
-      const deduced = deduce(column, outcome.rows, domain);
+      const deduced = deduce(column, outcome.rows);
       const result = upsertFieldMapping(db, {
         sourceDb: outcome.sourceDb,
         sourceTable: outcome.sourceTable,
         sourceColumn: column,
-        destinationDomain: domain,
+        destinationDomain: DESTINATION_DOMAIN,
         destinationField: deduced.destinationField,
         additionalInfoKey: deduced.additionalInfoKey,
         confidence: deduced.confidence,
@@ -187,7 +195,7 @@ function readLeadsConfigFromEnv(): LeadsClientConfig {
   return {
     baseUrl,
     dbsPath: process.env.LEADS_DB_ALL ?? "dbs",
-    exportPath: process.env.LEADS_DB_EXPORT ?? "export",
+    companiesPath: process.env.LEADS_DB_EXPORT ?? "companies",
     keyValue,
   };
 }
@@ -225,7 +233,7 @@ async function main(): Promise<void> {
       case "seed": {
         const result = runSeed(db, DEFAULT_SEED_JSON_PATH);
         console.log(
-          `Seed load complete: ${result.totalRows} rows processed, ${result.appliedCount} applied, ${result.skippedAdminCount} skipped (admin-owned).`,
+          `Seed load complete: ${result.totalRows} rows processed, ${result.appliedCount} applied, ${result.skippedAdminCount} skipped (already existed).`,
         );
         break;
       }
@@ -239,7 +247,7 @@ async function main(): Promise<void> {
       case "sample": {
         if (flags.refresh !== true) {
           console.error(
-            'The "sample" command hits the live Leads DB — pass --refresh to confirm (e.g. `sample --refresh --db ar --table companies`).',
+            'The "sample" command hits the live Leads DB — pass --refresh to confirm (e.g. `sample --refresh --db BR --table companies`).',
           );
           process.exitCode = 1;
           break;
@@ -249,7 +257,7 @@ async function main(): Promise<void> {
           sourceTable: typeof flags.table === "string" ? flags.table : undefined,
         });
         console.log(
-          `Sample run complete: ${result.processedTables} tables processed, ${result.appliedMappings} mappings applied, ${result.skippedAdminMappings} skipped (admin-owned), ${result.failedTables.length} tables failed.`,
+          `Sample run complete: ${result.processedTables} tables processed, ${result.appliedMappings} mappings applied, ${result.skippedAdminMappings} skipped (already existed), ${result.failedTables.length} tables failed.`,
         );
         if (result.failedTables.length > 0) {
           console.warn("Failed tables:", result.failedTables);

@@ -1,28 +1,10 @@
-export type DestinationDomain = "AiSearchResults" | "LinkedinSearchResults";
+export type DestinationDomain = "AiSearchResults";
 export type Confidence = "high" | "medium" | "low";
 
 export interface DeducedField {
   readonly destinationField: string | null;
   readonly additionalInfoKey: string | null;
   readonly confidence: Confidence | null;
-}
-
-/**
- * source_db values that classify as the Person domain (LinkedinSearchResults).
- * Every other source_db classifies as the Company domain (AiSearchResults).
- * This is a locked, literal rule — applied uniformly even where the fit is
- * weak (e.g. contact_scrape has no LinkedIn-specific columns) and NOT applied
- * to near-miss names (e.g. domain_contacts stays Company).
- */
-const PERSON_SOURCE_DBS: ReadonlySet<string> = new Set([
-  "contact_ar",
-  "contact_cl",
-  "contact_ec",
-  "contact_scrape",
-]);
-
-export function classifyDomain(sourceDb: string): DestinationDomain {
-  return PERSON_SOURCE_DBS.has(sourceDb) ? "LinkedinSearchResults" : "AiSearchResults";
 }
 
 /**
@@ -40,6 +22,7 @@ const TAX_ID_ADDITIONAL_INFO_KEYS: Readonly<Record<string, string>> = {
   cnpj_basico: "sourceTaxIdRoot",
   tax_id_type: "sourceTaxIdType",
   company_id: "sourceRecordId",
+  matricula: "sourceRegistrationNumber",
 };
 
 export function taxIdAdditionalInfoKey(column: string): string | null {
@@ -51,6 +34,11 @@ export function taxIdAdditionalInfoKey(column: string): string | null {
  * match-confidence signals, internal join keys) with no reasonable Axelor
  * destination. These are intentionally left unmapped (destination_field:
  * null) rather than guessed into additionalInfo.
+ *
+ * `matricula`, `is_tourism`, and `is_supplement` are deliberately NOT in this
+ * set: the ground-truth deduced dataset preserves them in additionalInfo
+ * rather than leaving them unmapped (matricula via the tax-id key map above;
+ * is_tourism/is_supplement via the generic additionalInfo fallback below).
  */
 const METADATA_ONLY_COLUMNS: ReadonlySet<string> = new Set([
   "phone_valid",
@@ -64,9 +52,6 @@ const METADATA_ONLY_COLUMNS: ReadonlySet<string> = new Set([
   "email_flag",
   "linked_to_company",
   "matched_nit",
-  "matricula",
-  "is_tourism",
-  "is_supplement",
   "osm_type",
   "osm_id",
   "establishment",
@@ -166,47 +151,36 @@ const AI_SEARCH_RESULTS_FIELD_BY_COLUMN: Readonly<Record<string, string>> = {
 };
 
 /**
- * Exact-name matches for the LinkedinSearchResults (Person) domain. Only
- * contact_scrape has been sampled so far, so this map is intentionally small
- * — it grows as new Person tables (contact_ar/cl/ec) are sampled with data.
- */
-const LINKEDIN_SEARCH_RESULTS_FIELD_BY_COLUMN: Readonly<Record<string, string>> = {
-  email: "email",
-  phone: "phone",
-  phone_landline: "phone",
-  phone_mobile: "phone",
-  whatsapp: "phone",
-  status: "description",
-  website: "link",
-};
-
-function fieldMapForDomain(domain: DestinationDomain): Readonly<Record<string, string>> {
-  return domain === "LinkedinSearchResults"
-    ? LINKEDIN_SEARCH_RESULTS_FIELD_BY_COLUMN
-    : AI_SEARCH_RESULTS_FIELD_BY_COLUMN;
-}
-
-/**
  * Deduces the Axelor destination field for a single source column.
  *
- * Pure and deterministic: the same (column, domain) pair always yields the
- * same result. `sampleValues` is accepted for signature parity with the
- * design (`deduce(column, sampleValues, domain)`) and reserved for future
- * value-based refinement, but every rule this heuristic currently encodes
- * (tax-id preservation, metadata exclusion, name-based matching) is
- * decidable from the column name alone.
+ * Pure and deterministic: the same (column, sampleValues) pair always yields
+ * the same result. `sampleValues` is accepted for signature parity with the
+ * design and reserved for future value-based refinement, but every rule this
+ * heuristic currently encodes (tax-id preservation, metadata exclusion,
+ * name-based matching) is decidable from the column name alone.
+ *
+ * The Leads DB source now only exposes company data via `/companies` — there
+ * is no person-lead endpoint — so every column deduces against the single
+ * AiSearchResults (Company) domain unconditionally; no domain classification
+ * step is needed.
+ *
+ * KNOWN LIMITATION (deferred, not fixed here): this function evaluates one
+ * column at a time and cannot see sibling columns in the same schema, so it
+ * cannot apply sibling-aware confidence downgrades (e.g. a secondary `phone2`
+ * vs the primary `phone`, or `domain` vs an existing `website` column) the
+ * way the curated ground-truth dataset does. `sample --refresh` on brand-new
+ * columns may therefore return flat `high` confidence where the ground truth
+ * would rate lower. This does not affect seed correctness, since the seed
+ * loader reads confidence directly from the committed JSON and never calls
+ * `deduce()`.
  *
  * Resolution order:
- * 1. Tax/record identifier columns -> additionalInfo + key (domain-agnostic)
+ * 1. Tax/record identifier columns -> additionalInfo + key
  * 2. Known metadata-only columns -> null (intentionally unmapped)
- * 3. Exact-name match against the domain's known Axelor fields -> that field
+ * 3. Exact-name match against the known AiSearchResults fields -> that field
  * 4. No match -> additionalInfo with no key (generic preservation, low confidence)
  */
-export function deduce(
-  column: string,
-  sampleValues: ReadonlyArray<unknown>,
-  domain: DestinationDomain,
-): DeducedField {
+export function deduce(column: string, sampleValues: ReadonlyArray<unknown>): DeducedField {
   void sampleValues;
 
   const taxIdKey = taxIdAdditionalInfoKey(column);
@@ -218,7 +192,7 @@ export function deduce(
     return { destinationField: null, additionalInfoKey: null, confidence: null };
   }
 
-  const matchedField = fieldMapForDomain(domain)[column];
+  const matchedField = AI_SEARCH_RESULTS_FIELD_BY_COLUMN[column];
   if (matchedField !== undefined) {
     return { destinationField: matchedField, additionalInfoKey: null, confidence: "high" };
   }
