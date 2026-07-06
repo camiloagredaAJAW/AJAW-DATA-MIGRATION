@@ -24,23 +24,22 @@ function bootstrappedDb(): Database.Database {
 }
 
 function fakeLeadsConfig(
-  databases: Record<string, string[]>,
-  tableRows: Record<string, Record<string, unknown>[]>,
+  countries: Record<string, unknown>,
+  countryRows: Record<string, Record<string, unknown>[]>,
 ): LeadsClientConfig {
   const fetchImpl = vi.fn(async (url: string) => {
     if (url.includes("/dbs")) {
       return {
         ok: true,
         status: 200,
-        json: async () => ({ countries: {}, databases }),
-        text: async () => JSON.stringify({ countries: {}, databases }),
+        json: async () => ({ countries, databases: {} }),
+        text: async () => JSON.stringify({ countries, databases: {} }),
       };
     }
 
-    const dbMatch = /db=([^&]+)/.exec(url);
-    const tableMatch = /table=([^&]+)/.exec(url);
-    const key = `${dbMatch?.[1]}/${tableMatch?.[1]}`;
-    const rows = tableRows[key] ?? [];
+    const countryMatch = /country=([^&]+)/.exec(url);
+    const code = countryMatch?.[1] ?? "";
+    const rows = countryRows[code] ?? [];
     const jsonl = rows.map((row) => JSON.stringify(row)).join("\n");
     return {
       ok: true,
@@ -53,28 +52,28 @@ function fakeLeadsConfig(
   return {
     baseUrl: "http://leads.example.test",
     dbsPath: "dbs",
-    exportPath: "export",
+    companiesPath: "companies",
     keyValue: "ajaw_live_2026",
     fetchImpl: fetchImpl as unknown as typeof fetch,
   };
 }
 
 describe("bootstrap CLI: migrate + seed", () => {
-  it("loads exactly the committed 832 seed rows on a fresh database", () => {
+  it("loads exactly the committed 163 seed rows on a fresh database", () => {
     const db = bootstrappedDb();
 
     const result = runSeed(db, seedJsonPath);
 
-    expect(result.totalRows).toBe(832);
+    expect(result.totalRows).toBe(163);
     const countRow = db.prepare(`SELECT COUNT(*) as count FROM field_mappings`).get() as {
       count: number;
     };
-    expect(countRow.count).toBe(832);
+    expect(countRow.count).toBe(163);
   });
 });
 
 describe("bootstrap CLI: sample --refresh", () => {
-  it("creates rows only for a newly-discovered catalog table, leaving other rows untouched", async () => {
+  it("creates rows only for a newly-discovered catalog country, leaving other rows untouched", async () => {
     const db = bootstrappedDb();
     runSeed(db, seedJsonPath);
 
@@ -83,15 +82,15 @@ describe("bootstrap CLI: sample --refresh", () => {
     ).count;
 
     const leadsConfig = fakeLeadsConfig(
-      { brand_new_db: ["brand_new_table"] },
+      { ZZ: {} },
       {
-        "brand_new_db/brand_new_table": [{ legal_name: "ACME", tax_id: "123" }],
+        ZZ: [{ legal_name: "ACME", tax_id: "123" }],
       },
     );
     await runRefreshCatalog(db, leadsConfig);
     const result = await runSample(db, leadsConfig, {
-      sourceDb: "brand_new_db",
-      sourceTable: "brand_new_table",
+      sourceDb: "ZZ",
+      sourceTable: "companies",
     });
 
     expect(result.appliedMappings).toBe(2);
@@ -103,7 +102,7 @@ describe("bootstrap CLI: sample --refresh", () => {
     const newRow = db
       .prepare(
         `SELECT destination_field FROM field_mappings
-         WHERE source_db = 'brand_new_db' AND source_table = 'brand_new_table' AND source_column = 'legal_name'`,
+         WHERE source_db = 'ZZ' AND source_table = 'companies' AND source_column = 'legal_name'`,
       )
       .get() as { destination_field: string };
     expect(newRow.destination_field).toBe("title");
@@ -115,38 +114,38 @@ describe("bootstrap CLI: sample --refresh", () => {
 
     db.prepare(
       `UPDATE field_mappings SET destination_field = 'title', origin = 'admin'
-       WHERE source_db = 'ar' AND source_table = 'ar_extra' AND source_column = 'cuit'`,
+       WHERE source_db = 'CO' AND source_table = 'companies' AND source_column = 'matricula'`,
     ).run();
 
     const leadsConfig = fakeLeadsConfig(
-      { ar: ["ar_extra"] },
+      { CO: {} },
       {
-        "ar/ar_extra": [{ cuit: "20-12345678-9", tipo: "SA", fecha: "2020-01-01" }],
+        CO: [{ matricula: "12345-CO", tipo: "SA", fecha: "2020-01-01" }],
       },
     );
     await runRefreshCatalog(db, leadsConfig);
-    await runSample(db, leadsConfig, { sourceDb: "ar", sourceTable: "ar_extra" });
+    await runSample(db, leadsConfig, { sourceDb: "CO", sourceTable: "companies" });
 
     const row = db
       .prepare(
         `SELECT destination_field, origin FROM field_mappings
-         WHERE source_db = 'ar' AND source_table = 'ar_extra' AND source_column = 'cuit'`,
+         WHERE source_db = 'CO' AND source_table = 'companies' AND source_column = 'matricula'`,
       )
       .get() as { destination_field: string; origin: string };
     expect(row.origin).toBe("admin");
     expect(row.destination_field).toBe("title");
   });
 
-  it("skips a 0-row table without deleting any existing rows for it", async () => {
+  it("skips a 0-row country without deleting any existing rows for it", async () => {
     const db = bootstrappedDb();
     runSeed(db, seedJsonPath);
     const beforeCount = (
       db.prepare(`SELECT COUNT(*) as count FROM field_mappings`).get() as { count: number }
     ).count;
 
-    const leadsConfig = fakeLeadsConfig({ ar: ["companies"] }, { "ar/companies": [] });
+    const leadsConfig = fakeLeadsConfig({ CO: {} }, { CO: [] });
     await runRefreshCatalog(db, leadsConfig);
-    const result = await runSample(db, leadsConfig, { sourceDb: "ar", sourceTable: "companies" });
+    const result = await runSample(db, leadsConfig, { sourceDb: "CO", sourceTable: "companies" });
 
     expect(result.appliedMappings).toBe(0);
     const afterCount = (
@@ -155,17 +154,17 @@ describe("bootstrap CLI: sample --refresh", () => {
     expect(afterCount).toBe(beforeCount);
   });
 
-  it("reports a failing table without aborting the rest of the run", async () => {
+  it("reports a failing country without aborting the rest of the run", async () => {
     const db = bootstrappedDb();
     runSeed(db, seedJsonPath);
 
-    const leadsConfig = fakeLeadsConfig({ ar: ["companies"] }, {});
+    const leadsConfig = fakeLeadsConfig({ CO: {} }, {});
     (leadsConfig.fetchImpl as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
       async () => ({
         ok: true,
         status: 200,
-        json: async () => ({ countries: {}, databases: { ar: ["companies"] } }),
-        text: async () => JSON.stringify({ countries: {}, databases: { ar: ["companies"] } }),
+        json: async () => ({ countries: { CO: {} }, databases: {} }),
+        text: async () => JSON.stringify({ countries: { CO: {} }, databases: {} }),
       }),
     );
     await runRefreshCatalog(db, leadsConfig);
@@ -173,10 +172,8 @@ describe("bootstrap CLI: sample --refresh", () => {
     (leadsConfig.fetchImpl as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new Error("timeout"),
     );
-    const result = await runSample(db, leadsConfig, { sourceDb: "ar", sourceTable: "companies" });
+    const result = await runSample(db, leadsConfig, { sourceDb: "CO", sourceTable: "companies" });
 
-    expect(result.failedTables).toEqual([
-      { sourceDb: "ar", sourceTable: "companies", error: "timeout" },
-    ]);
+    expect(result.failedTables).toEqual([{ sourceDb: "CO", sourceTable: "companies", error: "timeout" }]);
   });
 });
