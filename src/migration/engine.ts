@@ -68,7 +68,8 @@ export interface MigrationSummary {
   readonly countries: readonly CountryMigrationSummary[];
 }
 
-const SOURCE_TABLE = "companies";
+/** Source table name in the Leads DB — every country now exposes exactly one table. */
+export const SOURCE_TABLE = "companies";
 
 function getDefaultCountries(db: Database.Database): string[] {
   const rows = db
@@ -86,9 +87,39 @@ function errorMessage(error: unknown): string {
  * raw record payload (per the migration-persistence spec) — just a single
  * recognizable field, when present, to help a human locate the failing row.
  */
-function deriveRecordIdentifier(record: Record<string, unknown>): string | null {
+export function deriveRecordIdentifier(record: Record<string, unknown>): string | null {
   const candidate = record["legal_name"] ?? record["name"] ?? record["id"];
   return typeof candidate === "string" ? candidate : null;
+}
+
+/**
+ * Creates the `AiSearch` parent record for a country and persists its id onto
+ * the checkpoint. Shared by the engine's per-country loop (lazy first-record
+ * creation) and the single-record retry flow (`retry.ts`), which needs the
+ * exact same on-the-spot creation when a country's checkpoint has no
+ * `aiSearchId` yet (e.g. its only record so far failed before the parent was
+ * ever created).
+ */
+export async function createAiSearchParent(
+  db: Database.Database,
+  session: AxelorSessionClient,
+  axelorConfig: AxelorConfig,
+  checkpointId: number,
+  countryCode: string,
+  fetchImpl: typeof fetch,
+): Promise<number> {
+  const parent = await createAiSearch(
+    session,
+    axelorConfig,
+    {
+      statusSelect: 1,
+      searchString: `Leads DB migration - ${countryCode}`,
+      resultsNumber: 0,
+    },
+    fetchImpl,
+  );
+  setAiSearchId(db, checkpointId, parent.id);
+  return parent.id;
 }
 
 interface CountryMigrationContext {
@@ -161,18 +192,14 @@ async function runCountryMigration(ctx: CountryMigrationContext): Promise<Countr
         const rawRecord = page[index]!;
         try {
           if (aiSearchId === null) {
-            const parent = await createAiSearch(
+            aiSearchId = await createAiSearchParent(
+              db,
               session,
               axelorConfig,
-              {
-                statusSelect: 1,
-                searchString: `Leads DB migration - ${countryCode}`,
-                resultsNumber: 0,
-              },
+              checkpoint.id,
+              countryCode,
               fetchImpl,
             );
-            aiSearchId = parent.id;
-            setAiSearchId(db, checkpoint.id, aiSearchId);
           }
 
           const sanitized = sanitizeRecord(rawRecord);
