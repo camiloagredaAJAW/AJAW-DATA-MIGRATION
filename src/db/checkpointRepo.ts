@@ -78,6 +78,19 @@ export function upsertCheckpoint(
   return checkpoint;
 }
 
+/**
+ * Lists every checkpoint for a run, ordered by country_code, so a status
+ * endpoint can report per-country progress. Returns an empty array when the
+ * run has no checkpoints yet.
+ */
+export function listByRun(db: Database.Database, runId: number): MigrationCheckpointRow[] {
+  const rows = db
+    .prepare(`SELECT * FROM migration_checkpoints WHERE run_id = ? ORDER BY country_code`)
+    .all(runId) as Record<string, unknown>[];
+
+  return rows.map(mapSqlRowToCheckpointRow);
+}
+
 /** Sets last_offset on an existing checkpoint. Returns null if it does not exist. */
 export function advanceOffset(
   db: Database.Database,

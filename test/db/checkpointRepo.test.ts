@@ -6,6 +6,7 @@ import { createRun } from "../../src/db/runsRepo.js";
 import {
   advanceOffset,
   getByRunCountry,
+  listByRun,
   setAiSearchId,
   setStatus,
   upsertCheckpoint,
@@ -114,6 +115,42 @@ describe("setAiSearchId", () => {
     const updated = setAiSearchId(db, checkpoint.id, 456);
 
     expect(updated?.aiSearchId).toBe(456);
+  });
+});
+
+describe("listByRun", () => {
+  it("returns every checkpoint for a run, ordered by country_code", () => {
+    const db = freshDb();
+    const run = createRun(db);
+    upsertCheckpoint(db, run.id, "cl");
+    upsertCheckpoint(db, run.id, "ar");
+
+    const found = listByRun(db, run.id);
+
+    expect(found).toHaveLength(2);
+    expect(found.map((row) => row.countryCode)).toEqual(["ar", "cl"]);
+  });
+
+  it("returns an empty array when the run has no checkpoints yet", () => {
+    const db = freshDb();
+    const run = createRun(db);
+
+    const found = listByRun(db, run.id);
+
+    expect(found).toEqual([]);
+  });
+
+  it("does not return checkpoints belonging to a different run", () => {
+    const db = freshDb();
+    const runA = createRun(db);
+    const runB = createRun(db);
+    upsertCheckpoint(db, runA.id, "ar");
+    upsertCheckpoint(db, runB.id, "cl");
+
+    const found = listByRun(db, runA.id);
+
+    expect(found).toHaveLength(1);
+    expect(found[0]?.countryCode).toBe("ar");
   });
 });
 
