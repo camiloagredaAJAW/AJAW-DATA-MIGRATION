@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<domain-models xmlns="http://axelor.com/xml/ns/domain-models"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://axelor.com/xml/ns/domain-models http://axelor.com/xml/ns/domain-models/domain-models_6.1.xsd">
+
+  <module package="com.ajawmrp3.apps.prospectingai.db" name="prospectingai"/>
+
+  <entity name="LinkedinSearchResults">
+    <many-to-one ref="com.ajawmrp3.apps.prospectingai.db.LinkedinSearch"
+      name="linkedinSearch" title="Linkedin Search"/>
+    <string name="name" title="Name"/>
+    <string name="title" title="Title"/>
+    <string name="link" title="Link"/>
+    <string name="snippet" title="Snippet"/>
+    <string name="image" title="Image"/>
+    <string name="description" title="Description" large="true" multiline="true"/>
+    <enum name="searchResultStatusSelect" ref="LinkedinSearchResultStatus"
+      title="Search result status" required="true"/>
+    <string name="fullName" title="Full name"/>
+    <string name="email" title="Email"/>
+    <string name="phone" title="Phone"/>
+    <string name="education" title="Education" large="true" multiline="true"/>
+    <string name="experiencies" title="experiencies" large="true" multiline="true"/>
+    <string name="countryCode" title="Country Code"/>
+    <string name="location" title="location"/>
+    <string name="about" title="About" large="true" multiline="true"/>
+    <boolean name="itemSelected" title="Item selected" default="false"/>
+    <string name="slug" title="Slug"/>
+  </entity>
+
+  <enum name="LinkedinSearchResultStatus">
+    <item name="UNPROCESSED" title="unprocessed"/>
+    <item name="PROCESSED" title="processed"/>
+  </enum>
+
+</domain-models>

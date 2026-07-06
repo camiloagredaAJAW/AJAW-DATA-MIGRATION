@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<domain-models xmlns="http://axelor.com/xml/ns/domain-models"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://axelor.com/xml/ns/domain-models http://axelor.com/xml/ns/domain-models/domain-models_6.1.xsd">
+
+  <module package="com.ajawmrp3.apps.prospectingai.db" name="prospectingai"/>
+
+  <entity name="AiSearchResults">
+    <many-to-one ref="com.ajawmrp3.apps.prospectingai.db.AiSearch" name="aiSearch"
+      title="Ai Search"/>
+    <string name="title" title="Title"/>
+    <string name="categoryName" title="Category name"/>
+    <string name="address" title="Address"/>
+    <string name="neighborhood" title="Neighborhood"/>
+    <string name="street" title="street"/>
+    <string name="city" title="city"/>
+    <string name="postalCode" title="Postal code"/>
+    <string name="state" title="State"/>
+    <string name="countryCode" title="Country code"/>
+    <string name="phoneUnformatted" title="Phone unformatted"/>
+    <string name="permanentlyClosed" title="Permanently closed"/>
+    <string name="openingHours" title="Opening hours" json="true"/>
+    <string name="website" title="Website"/>
+    <string name="additionalInfo" title="Additional info" json="true"/>
+    <string name="error" title="Error"/>
+    <string name="errorDescription" title="Error description"/>
+    <string name="description" title="Description" large="true" multiline="true"/>
+    <string name="descriptionMd" title="Description MD" large="true" multiline="true"/>
+    <string name="slug" title="Slug"/>
+    <string name="email" title="Email"/>
+  </entity>
+
+</domain-models>
