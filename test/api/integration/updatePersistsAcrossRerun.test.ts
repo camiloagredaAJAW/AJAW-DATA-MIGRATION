@@ -32,23 +32,22 @@ function validHeaders(): Record<string, string> {
 }
 
 function fakeLeadsConfig(
-  databases: Record<string, string[]>,
-  tableRows: Record<string, Record<string, unknown>[]>,
+  countries: Record<string, unknown>,
+  countryRows: Record<string, Record<string, unknown>[]>,
 ): LeadsClientConfig {
   const fetchImpl = vi.fn(async (url: string) => {
     if (url.includes("/dbs")) {
       return {
         ok: true,
         status: 200,
-        json: async () => ({ countries: {}, databases }),
-        text: async () => JSON.stringify({ countries: {}, databases }),
+        json: async () => ({ countries, databases: {} }),
+        text: async () => JSON.stringify({ countries, databases: {} }),
       };
     }
 
-    const dbMatch = /db=([^&]+)/.exec(url);
-    const tableMatch = /table=([^&]+)/.exec(url);
-    const key = `${dbMatch?.[1]}/${tableMatch?.[1]}`;
-    const rows = tableRows[key] ?? [];
+    const countryMatch = /country=([^&]+)/.exec(url);
+    const code = countryMatch?.[1] ?? "";
+    const rows = countryRows[code] ?? [];
     const jsonl = rows.map((row) => JSON.stringify(row)).join("\n");
     return {
       ok: true,
@@ -61,7 +60,7 @@ function fakeLeadsConfig(
   return {
     baseUrl: "http://leads.example.test",
     dbsPath: "dbs",
-    exportPath: "export",
+    companiesPath: "companies",
     keyValue: "ajaw_live_2026",
     fetchImpl: fetchImpl as unknown as typeof fetch,
   };
@@ -76,7 +75,7 @@ describe("authenticated CRUD update survives a later bootstrap CLI rerun", () =>
     const server = buildServer({ db, authConfig });
     const row = db
       .prepare(
-        `SELECT id FROM field_mappings WHERE source_db = 'ar' AND source_table = 'ar_extra' AND source_column = 'cuit'`,
+        `SELECT id FROM field_mappings WHERE source_db = 'CO' AND source_table = 'companies' AND source_column = 'matricula'`,
       )
       .get() as { id: number };
 
@@ -90,11 +89,11 @@ describe("authenticated CRUD update survives a later bootstrap CLI rerun", () =>
     expect(updateResponse.json().data.origin).toBe("admin");
 
     const leadsConfig = fakeLeadsConfig(
-      { ar: ["ar_extra"] },
-      { "ar/ar_extra": [{ cuit: "20-12345678-9", tipo: "SA" }] },
+      { CO: {} },
+      { CO: [{ matricula: "12345-CO", tipo: "SA" }] },
     );
     await runRefreshCatalog(db, leadsConfig);
-    await runSample(db, leadsConfig, { sourceDb: "ar", sourceTable: "ar_extra" });
+    await runSample(db, leadsConfig, { sourceDb: "CO", sourceTable: "companies" });
 
     const persisted = db
       .prepare(`SELECT destination_field, origin FROM field_mappings WHERE id = ?`)
