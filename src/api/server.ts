@@ -11,6 +11,8 @@ import {
   type MigrationControlDeps,
 } from "./routes/migrationControl.js";
 import type { MigrationEngineDeps, MigrationSummary } from "../migration/engine.js";
+import { buildMigrationDeps } from "../cli/migrate.js";
+import { updateRunStatus } from "../db/runsRepo.js";
 
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -20,8 +22,10 @@ export interface BuildServerOptions {
   /**
    * Migration engine dependencies. When omitted, the `/api/migration/*`
    * control routes are not registered at all (e.g. a deployment that only
-   * needs the field_mappings API). Real server startup wiring (env-based
-   * deps + the startup orphaned-run cleanup hook) lands in a later slice.
+   * needs the field_mappings API). `main()` always builds and passes these
+   * from env config via `buildMigrationDeps` (reused from `cli/migrate.ts`);
+   * this stays optional so tests and field_mappings-only deployments can omit
+   * it.
    */
   readonly migrationDeps?: MigrationControlDeps;
   /** Injectable engine invocation for the migration control routes. Defaults to the real `runMigration`. */
@@ -46,6 +50,30 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
   return fastify;
 }
 
+/**
+ * Transitions every `migration_runs` row still marked `'running'` to
+ * `'failed'`. Intended to run once, before the server starts accepting
+ * requests: the in-process controller registry is always empty right after a
+ * fresh process start, so any `'running'` row at that point is definitionally
+ * orphaned — no live controller can exist yet to finish it. A `'paused'` run
+ * is left untouched: it is a valid resumable state that survives a server
+ * restart, unlike `'running'`, which implies an in-process loop that no
+ * longer exists.
+ *
+ * Returns the ids of the runs that were transitioned, for observability.
+ */
+export function cleanupOrphanedRuns(db: Database.Database): number[] {
+  const orphaned = db
+    .prepare(`SELECT id FROM migration_runs WHERE status = 'running'`)
+    .all() as { id: number }[];
+
+  for (const { id } of orphaned) {
+    updateRunStatus(db, id, "failed");
+  }
+
+  return orphaned.map((row) => row.id);
+}
+
 function readAuthConfigFromEnv(): AuthConfig {
   const username = process.env.AXELOR_USERNAME;
   const password = process.env.AXELOR_PASSWORD;
@@ -62,7 +90,16 @@ async function main(): Promise<void> {
   const dbPath = process.env.SQLITE_PATH ?? path.join(REPO_ROOT, "data", "mapping.db");
   const db = openConnection(dbPath);
   const authConfig = readAuthConfigFromEnv();
-  const server = buildServer({ db, authConfig });
+
+  const orphaned = cleanupOrphanedRuns(db);
+  if (orphaned.length > 0) {
+    console.warn(
+      `Marked ${orphaned.length} orphaned 'running' migration run(s) as 'failed' on startup: ${orphaned.join(", ")}`,
+    );
+  }
+
+  const migrationDeps = buildMigrationDeps(db);
+  const server = buildServer({ db, authConfig, migrationDeps });
 
   const port = process.env.PORT ? Number(process.env.PORT) : 3000;
   await server.listen({ port, host: "0.0.0.0" });

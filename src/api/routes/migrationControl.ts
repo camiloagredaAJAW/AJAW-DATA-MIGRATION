@@ -1,8 +1,16 @@
 import type { FastifyInstance } from "fastify";
 import type Database from "better-sqlite3";
-import { createRun, getActiveRun, updateRunStatus, type MigrationRunRow } from "../../db/runsRepo.js";
+import { z } from "zod";
+import {
+  createRun,
+  getActiveRun,
+  getMostRecentRun,
+  updateRunStatus,
+  type MigrationRunRow,
+} from "../../db/runsRepo.js";
 import { listByRun } from "../../db/checkpointRepo.js";
 import { listImportErrors } from "../../db/importErrorRepo.js";
+import { retrySingleRecord } from "../../migration/retry.js";
 import { runMigration, type MigrationEngineDeps, type MigrationSummary } from "../../migration/engine.js";
 
 /** Every engine dependency except the ones the routes derive per-call (`countries`, `runId`). */
@@ -17,9 +25,27 @@ function conflictError(message: string): { error: { code: string; message: strin
   return { error: { code: "conflict", message } };
 }
 
+function notFoundError(message: string): { error: { code: string; message: string } } {
+  return { error: { code: "not_found", message } };
+}
+
+function validationError(message: string): { error: { code: string; message: string } } {
+  return { error: { code: "validation_error", message } };
+}
+
 function runSummary(run: MigrationRunRow): { runId: number; status: MigrationRunRow["status"] } {
   return { runId: run.id, status: run.status };
 }
+
+const errorsQuerySchema = z.object({
+  runId: z.coerce.number().int().positive().optional(),
+  countryCode: z.string().optional(),
+  resolved: z.enum(["true", "false"]).optional(),
+});
+
+const errorIdParamSchema = z.object({
+  id: z.coerce.number().int().positive(),
+});
 
 /**
  * Registers the migration lifecycle-control routes: start/pause/resume/stop
@@ -96,30 +122,66 @@ export function registerMigrationControlRoutes(
   });
 
   fastify.get("/api/migration/status", async (_request, reply) => {
-    const active = getActiveRun(db);
-    if (active === null) {
+    const mostRecent = getMostRecentRun(db);
+    if (mostRecent === null) {
       return reply.send({ data: { run: null, checkpoints: [], totals: { errors: 0 } } });
     }
 
-    const checkpoints = listByRun(db, active.id).map((checkpoint) => ({
+    const checkpoints = listByRun(db, mostRecent.id).map((checkpoint) => ({
       countryCode: checkpoint.countryCode,
       lastOffset: checkpoint.lastOffset,
       status: checkpoint.status,
       aiSearchId: checkpoint.aiSearchId,
     }));
-    const errors = listImportErrors(db, { runId: active.id }).length;
+    const errors = listImportErrors(db, { runId: mostRecent.id }).length;
 
     return reply.send({
       data: {
         run: {
-          id: active.id,
-          status: active.status,
-          startedAt: active.startedAt,
-          updatedAt: active.updatedAt,
+          id: mostRecent.id,
+          status: mostRecent.status,
+          startedAt: mostRecent.startedAt,
+          updatedAt: mostRecent.updatedAt,
         },
         checkpoints,
         totals: { errors },
       },
     });
+  });
+
+  fastify.get("/api/migration/errors", async (request, reply) => {
+    const parsedQuery = errorsQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return reply.code(400).send(validationError(parsedQuery.error.message));
+    }
+
+    const { runId, countryCode, resolved } = parsedQuery.data;
+    const rows = listImportErrors(db, {
+      runId,
+      countryCode,
+      resolved: resolved === undefined ? undefined : resolved === "true",
+    });
+    return reply.send({ data: rows });
+  });
+
+  fastify.post("/api/migration/errors/:id/retry", async (request, reply) => {
+    const parsedParams = errorIdParamSchema.safeParse(request.params);
+    if (!parsedParams.success) {
+      return reply.code(400).send(validationError(parsedParams.error.message));
+    }
+
+    const outcome = await retrySingleRecord(deps, parsedParams.data.id);
+    switch (outcome.outcome) {
+      case "not_found":
+        return reply.code(404).send(notFoundError("import_errors row not found"));
+      case "already_resolved":
+        return reply.code(409).send(conflictError("import_errors row is already resolved"));
+      case "resolved":
+        return reply.send({ data: { outcome: "resolved", importError: outcome.importError } });
+      case "failed":
+        return reply.code(422).send({
+          data: { outcome: "failed", importError: outcome.importError, reason: outcome.reason },
+        });
+    }
   });
 }
