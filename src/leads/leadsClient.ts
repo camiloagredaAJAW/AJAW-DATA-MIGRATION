@@ -3,19 +3,27 @@ import { parseJsonLines } from "./parseJsonLines.js";
 export interface LeadsClientConfig {
   readonly baseUrl: string;
   readonly dbsPath: string;
-  readonly exportPath: string;
+  readonly companiesPath: string;
   readonly keyValue: string;
-  /** Per-request timeout in ms. Defaults to 60s — brazil_cnpj/contacts has been observed to take up to ~45s. */
+  /** Per-request timeout in ms. Defaults to 60s — some countries have been observed to take up to ~45s. */
   readonly timeoutMs?: number;
   /** Injectable fetch implementation, defaults to the global fetch. Lets tests avoid touching the real network. */
   readonly fetchImpl?: typeof fetch;
 }
 
+/**
+ * A source_catalog pair. The Leads DB now exposes exactly one table
+ * (`companies`) per country, so `sourceDb` is always a country code and
+ * `sourceTable` is always the constant `"companies"`. The pair shape is kept
+ * (schema-continuity decision) to avoid churn in source_catalog, the diff
+ * logic, and downstream consumers — only the *meaning* of the pair changed.
+ */
 export interface LeadsCatalogEntry {
   readonly sourceDb: string;
   readonly sourceTable: string;
 }
 
+/** Result of sampling one country's `companies` data. `sourceDb` is the country code. */
 export interface TableSampleOutcome {
   readonly sourceDb: string;
   readonly sourceTable: string;
@@ -43,7 +51,11 @@ async function withTimeout<T>(
   }
 }
 
-/** Fetches the Leads DB catalog (`/dbs`) and flattens it into source_db/source_table pairs. */
+/**
+ * Fetches the Leads DB catalog (`/dbs`) and flattens the `countries` object's
+ * keys into source_db/source_table pairs (`sourceTable` is always
+ * `"companies"`). The legacy `databases` object is obsolete and ignored.
+ */
 export async function fetchCatalog(config: LeadsClientConfig): Promise<LeadsCatalogEntry[]> {
   const url = `${config.baseUrl}/${config.dbsPath}?key=${encodeURIComponent(config.keyValue)}`;
   const doFetch = resolveFetch(config);
@@ -53,27 +65,28 @@ export async function fetchCatalog(config: LeadsClientConfig): Promise<LeadsCata
     if (!response.ok) {
       throw new Error(`Leads DB catalog request failed with status ${response.status}`);
     }
-    const body = (await response.json()) as { databases?: Record<string, string[]> };
-    const entries: LeadsCatalogEntry[] = [];
-    for (const [sourceDb, tables] of Object.entries(body.databases ?? {})) {
-      for (const sourceTable of tables) {
-        entries.push({ sourceDb, sourceTable });
-      }
-    }
-    return entries;
+    const body = (await response.json()) as { countries?: Record<string, unknown> };
+    return Object.keys(body.countries ?? {}).map((countryCode) => ({
+      sourceDb: countryCode,
+      sourceTable: "companies",
+    }));
   });
 }
 
-/** Fetches at most `limit` sampled rows for one source_db/source_table via `/export?...&format=jsonl`. */
-export async function fetchTableSample(
+/**
+ * Fetches at most `limit` sampled company rows for one country via
+ * `/companies?country=<CODE>&has_phone=1&has_email=1&format=jsonl`.
+ * `has_phone`/`has_email` are hardcoded — sampling is only useful against
+ * records that already carry contact data worth deducing a mapping from.
+ */
+export async function fetchCountrySample(
   config: LeadsClientConfig,
-  sourceDb: string,
-  sourceTable: string,
+  countryCode: string,
   limit: number = DEFAULT_SAMPLE_LIMIT,
 ): Promise<Record<string, unknown>[]> {
   const url =
-    `${config.baseUrl}/${config.exportPath}?db=${encodeURIComponent(sourceDb)}` +
-    `&table=${encodeURIComponent(sourceTable)}&format=jsonl` +
+    `${config.baseUrl}/${config.companiesPath}?country=${encodeURIComponent(countryCode)}` +
+    `&has_phone=1&has_email=1&format=jsonl` +
     `&key=${encodeURIComponent(config.keyValue)}&limit=${limit}&offset=0`;
   const doFetch = resolveFetch(config);
 
@@ -81,7 +94,7 @@ export async function fetchTableSample(
     const response = await doFetch(url, { signal });
     if (!response.ok) {
       throw new Error(
-        `Leads DB export request failed for ${sourceDb}/${sourceTable} with status ${response.status}`,
+        `Leads DB companies request failed for country ${countryCode} with status ${response.status}`,
       );
     }
     const text = await response.text();
@@ -90,13 +103,13 @@ export async function fetchTableSample(
 }
 
 /**
- * Samples every given source_db/source_table pair. Each table is fetched
- * independently inside its own try/catch: a slow or failing table is
- * reported in its outcome's `error` field and never aborts the rest of the
- * run — this is the behavior that protects the overall bootstrap run from
- * one bad table (e.g. brazil_cnpj/contacts timing out).
+ * Samples every given source_catalog pair (`sourceDb` = country code). Each
+ * country is fetched independently inside its own try/catch: a slow or
+ * failing country is reported in its outcome's `error` field and never
+ * aborts the rest of the run — this is the behavior that protects the
+ * overall bootstrap run from one bad country (e.g. NI/SV returning HTTP 500).
  */
-export async function sampleTables(
+export async function sampleCountries(
   config: LeadsClientConfig,
   pairs: readonly LeadsCatalogEntry[],
   limit: number = DEFAULT_SAMPLE_LIMIT,
@@ -105,7 +118,7 @@ export async function sampleTables(
 
   for (const pair of pairs) {
     try {
-      const rows = await fetchTableSample(config, pair.sourceDb, pair.sourceTable, limit);
+      const rows = await fetchCountrySample(config, pair.sourceDb, limit);
       outcomes.push({ sourceDb: pair.sourceDb, sourceTable: pair.sourceTable, rows });
     } catch (error) {
       outcomes.push({
