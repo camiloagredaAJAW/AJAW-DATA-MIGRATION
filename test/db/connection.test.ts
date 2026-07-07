@@ -33,4 +33,14 @@ describe("openConnection", () => {
 
     db.close();
   });
+
+  it("creates the parent directory when it does not exist yet", () => {
+    tempDir = mkdtempSync(join(tmpdir(), "mapping-bootstrap-"));
+    const filePath = join(tempDir, "nested", "data", "mapping.db");
+
+    const db = openConnection(filePath);
+
+    expect(db.open).toBe(true);
+    db.close();
+  });
 });

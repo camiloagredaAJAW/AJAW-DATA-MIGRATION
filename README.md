@@ -45,6 +45,32 @@ npm test             # run the test suite
 npm run typecheck    # tsc --noEmit
 ```
 
+## Running a migration (first-time setup)
+
+The engine picks the countries to process from `source_catalog`, a cached
+snapshot of the Leads DB's `/dbs` response — **not** from `field_mappings`
+directly. `npm run seed` only populates `field_mappings`; `source_catalog`
+starts empty and stays empty until it's explicitly refreshed. Starting a
+migration with an empty `source_catalog` is not an error: the run silently
+iterates zero countries and marks itself `completed` immediately, with no
+checkpoints and no errors — worth knowing before assuming a `completed` run
+with nothing in "Per-Country Progress" actually did something.
+
+Required order for a fresh database:
+
+```bash
+npm run migrate                                    # 1. create the schema
+npm run seed                                       # 2. load field_mappings
+npx tsx src/cli/bootstrap.ts refresh-catalog        # 3. populate source_catalog from the live /dbs
+npm run dev:api                                     # 4. start the server, then hit Start from /admin/dashboard.html
+```
+
+Step 3 hits the live Leads DB (needs `LEADS_DB_*` from `.env`) but is
+lightweight — it only fetches the country list, unlike `sample --refresh`
+(part of `npm run refresh`), which re-samples rows per country to deduce
+mappings. Only countries present in **both** `source_catalog` and
+`field_mappings` actually get migrated.
+
 ## Documentation map
 
 | Doc | Covers |
