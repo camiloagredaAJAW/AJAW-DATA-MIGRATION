@@ -40,6 +40,7 @@ describe("createSessionClient", () => {
     expect(calledUrl).toBe("http://axelor.example.test/login.jsp");
     expect(calledInit.method).toBe("POST");
     expect((calledInit.headers as Record<string, string>).Authorization).toBe(session.authHeader);
+    expect(calledInit.body).toBe("");
   });
 
   it("caches the session across multiple getSession() calls (only one login request)", async () => {

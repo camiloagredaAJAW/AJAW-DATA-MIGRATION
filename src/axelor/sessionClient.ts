@@ -67,6 +67,12 @@ export function createSessionClient(
     const response = await fetchImpl(`${config.baseUrl}/login.jsp`, {
       method: "POST",
       headers: { Authorization: authHeader },
+      // A POST with no body at all omits Content-Length, which some
+      // Java/JSP stacks (login.jsp is a servlet) reject outright rather
+      // than treating as a zero-length body — an explicit empty body
+      // avoids that ambiguity. Confirmed against a working sibling
+      // integration (ajaw-insta-data) that always sends one.
+      body: "",
     });
 
     if (!response.ok) {
