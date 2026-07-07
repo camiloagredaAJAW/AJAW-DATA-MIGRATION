@@ -31,6 +31,14 @@ export interface RetrySingleRecordDeps {
 export type RetryOutcome =
   | { readonly outcome: "not_found" }
   | { readonly outcome: "already_resolved"; readonly importError: ImportErrorRow }
+  /**
+   * Returned by `MigrationController.retry()` (never by `retrySingleRecord`
+   * itself) when another retry for the same `errorId` is already in flight —
+   * guards against the two HTTP surfaces (`/api/migration/errors/:id/retry`
+   * and `/admin/api/errors/:id/retry`) racing the check-then-act sequence
+   * below and duplicating the Axelor writes.
+   */
+  | { readonly outcome: "retry_in_progress" }
   | { readonly outcome: "resolved"; readonly importError: ImportErrorRow }
   | { readonly outcome: "failed"; readonly importError: ImportErrorRow; readonly reason: string };
 

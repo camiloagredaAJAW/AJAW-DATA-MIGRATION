@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard — Ajaw Data Migration Admin</title>
+  <link rel="stylesheet" href="/admin/style.css" />
+</head>
+<body data-page="dashboard">
+  <header class="app-header">
+    <nav>
+      <a href="/admin/dashboard.html">Dashboard</a>
+      <a href="/admin/mappings.html">Field Mappings</a>
+      <a href="/admin/errors.html">Errors</a>
+    </nav>
+    <button id="logout-button">Log out</button>
+  </header>
+
+  <main>
+    <h1>Migration Status</h1>
+    <p id="dashboard-error" class="error-banner" hidden></p>
+
+    <section id="run-summary">
+      <p class="muted">Loading...</p>
+    </section>
+
+    <div class="controls-row">
+      <button id="start-button" class="primary" disabled>Start</button>
+      <button id="pause-button" disabled>Pause</button>
+      <button id="resume-button" disabled>Resume</button>
+      <button id="stop-button" class="danger" disabled>Stop</button>
+    </div>
+
+    <h2>Per-Country Progress</h2>
+    <table id="checkpoints-table">
+      <thead>
+        <tr>
+          <th>Country</th>
+          <th>Last Offset</th>
+          <th>Checkpoint Status</th>
+          <th>AiSearch Id</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <p class="muted">
+      Last offset is the resume checkpoint per country, not a processed/total
+      ratio — the source has no total-record count.
+    </p>
+  </main>
+
+  <script src="/admin/app.js"></script>
+</body>
+</html>

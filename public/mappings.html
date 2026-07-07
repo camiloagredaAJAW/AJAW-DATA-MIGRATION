@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Field Mappings — Ajaw Data Migration Admin</title>
+  <link rel="stylesheet" href="/admin/style.css" />
+</head>
+<body data-page="mappings">
+  <header class="app-header">
+    <nav>
+      <a href="/admin/dashboard.html">Dashboard</a>
+      <a href="/admin/mappings.html">Field Mappings</a>
+      <a href="/admin/errors.html">Errors</a>
+    </nav>
+    <button id="logout-button">Log out</button>
+  </header>
+
+  <main>
+    <h1>Field Mappings</h1>
+    <p id="mappings-error" class="error-banner" hidden></p>
+
+    <div class="filters-row">
+      <input type="text" id="filter-source-db" placeholder="source_db" />
+      <input type="text" id="filter-source-table" placeholder="source_table" />
+      <button id="filter-button">Filter</button>
+      <button id="clear-filter-button">Clear</button>
+    </div>
+
+    <table id="mappings-table">
+      <thead>
+        <tr>
+          <th>Source DB</th>
+          <th>Source Table</th>
+          <th>Source Column</th>
+          <th>Destination Field</th>
+          <th>Transform</th>
+          <th>Origin</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </main>
+
+  <script src="/admin/app.js"></script>
+</body>
+</html>

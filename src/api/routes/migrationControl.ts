@@ -1,25 +1,13 @@
 import type { FastifyInstance } from "fastify";
-import type Database from "better-sqlite3";
 import { z } from "zod";
-import {
-  createRun,
-  getActiveRun,
-  getMostRecentRun,
-  updateRunStatus,
-  type MigrationRunRow,
-} from "../../db/runsRepo.js";
-import { listByRun } from "../../db/checkpointRepo.js";
-import { listImportErrors } from "../../db/importErrorRepo.js";
-import { retrySingleRecord } from "../../migration/retry.js";
-import { runMigration, type MigrationEngineDeps, type MigrationSummary } from "../../migration/engine.js";
+import type { MigrationController, MigrationControllerDeps } from "../../migration/controller.js";
 
-/** Every engine dependency except the ones the routes derive per-call (`countries`, `runId`). */
-export type MigrationControlDeps = Omit<MigrationEngineDeps, "countries" | "runId">;
-
-export interface RegisterMigrationControlRoutesOptions {
-  /** Injectable engine invocation, defaults to the real `runMigration`. Tests substitute a controllable fake. */
-  readonly runMigrationFn?: (deps: MigrationEngineDeps) => Promise<MigrationSummary>;
-}
+/**
+ * Re-exported under its historical name: this used to be defined here before
+ * the controller extraction, and `server.ts`/tests still reference it as
+ * `MigrationControlDeps`.
+ */
+export type MigrationControlDeps = MigrationControllerDeps;
 
 function conflictError(message: string): { error: { code: string; message: string } } {
   return { error: { code: "conflict", message } };
@@ -31,10 +19,6 @@ function notFoundError(message: string): { error: { code: string; message: strin
 
 function validationError(message: string): { error: { code: string; message: string } } {
   return { error: { code: "validation_error", message } };
-}
-
-function runSummary(run: MigrationRunRow): { runId: number; status: MigrationRunRow["status"] } {
-  return { runId: run.id, status: run.status };
 }
 
 const errorsQuerySchema = z.object({
@@ -52,101 +36,50 @@ const errorIdParamSchema = z.object({
  * plus a status readout. Every route runs behind whatever auth hook the
  * caller registered on `fastify` beforehand (see `registerAuthGuard`).
  *
- * `/start` and `/resume` fire the engine WITHOUT awaiting it (respond 202
- * immediately) — `migration_runs.status` (not this function's registry) is
- * the single source of truth every route reads/writes, and is what the
- * engine's `ControlSignal` polls to halt cleanly (see `engine.ts`). The
- * closure-scoped `registry` here exists only to catch/log a fire-and-forget
- * rejection and clean up its own entry; it is never consulted by any route.
+ * Thin HTTP adapter over a shared `MigrationController` instance (see
+ * `migration/controller.ts`) — no business logic lives here, only
+ * outcome-to-status-code mapping and request validation. `buildServer`
+ * constructs a single controller instance so the `/api` and (future)
+ * `/admin` surfaces drive the exact same run/registry state.
  */
 export function registerMigrationControlRoutes(
   fastify: FastifyInstance,
-  db: Database.Database,
-  deps: MigrationControlDeps,
-  options: RegisterMigrationControlRoutesOptions = {},
+  controller: MigrationController,
 ): void {
-  const runMigrationFn = options.runMigrationFn ?? runMigration;
-  const registry = new Map<number, Promise<MigrationSummary>>();
-
-  function launch(runId: number): void {
-    const promise = runMigrationFn({ ...deps, runId });
-    registry.set(runId, promise);
-    promise
-      .catch((error: unknown) => {
-        console.error(`migration run ${runId} failed`, error);
-      })
-      .finally(() => {
-        registry.delete(runId);
-      });
-  }
-
   fastify.post("/api/migration/start", async (_request, reply) => {
-    if (getActiveRun(db) !== null) {
-      return reply.code(409).send(conflictError("A migration run is already running or paused"));
+    const result = controller.start();
+    if (result.outcome === "conflict") {
+      return reply.code(409).send(conflictError(result.message));
     }
-
-    const run = createRun(db);
-    launch(run.id);
-    return reply.code(202).send({ data: runSummary(run) });
+    return reply.code(202).send({ data: result.run });
   });
 
   fastify.post("/api/migration/pause", async (_request, reply) => {
-    const active = getActiveRun(db);
-    if (active === null || active.status !== "running") {
-      return reply.code(409).send(conflictError("No running migration run to pause"));
+    const result = controller.pause();
+    if (result.outcome === "conflict") {
+      return reply.code(409).send(conflictError(result.message));
     }
-
-    const updated = updateRunStatus(db, active.id, "paused") as MigrationRunRow;
-    return reply.send({ data: runSummary(updated) });
+    return reply.send({ data: result.run });
   });
 
   fastify.post("/api/migration/resume", async (_request, reply) => {
-    const active = getActiveRun(db);
-    if (active === null || active.status !== "paused") {
-      return reply.code(409).send(conflictError("No paused migration run to resume"));
+    const result = controller.resume();
+    if (result.outcome === "conflict") {
+      return reply.code(409).send(conflictError(result.message));
     }
-
-    const updated = updateRunStatus(db, active.id, "running") as MigrationRunRow;
-    launch(updated.id);
-    return reply.code(202).send({ data: runSummary(updated) });
+    return reply.code(202).send({ data: result.run });
   });
 
   fastify.post("/api/migration/stop", async (_request, reply) => {
-    const active = getActiveRun(db);
-    if (active === null) {
-      return reply.code(409).send(conflictError("No active migration run to stop"));
+    const result = controller.stop();
+    if (result.outcome === "conflict") {
+      return reply.code(409).send(conflictError(result.message));
     }
-
-    const updated = updateRunStatus(db, active.id, "stopped") as MigrationRunRow;
-    return reply.send({ data: runSummary(updated) });
+    return reply.send({ data: result.run });
   });
 
   fastify.get("/api/migration/status", async (_request, reply) => {
-    const mostRecent = getMostRecentRun(db);
-    if (mostRecent === null) {
-      return reply.send({ data: { run: null, checkpoints: [], totals: { errors: 0 } } });
-    }
-
-    const checkpoints = listByRun(db, mostRecent.id).map((checkpoint) => ({
-      countryCode: checkpoint.countryCode,
-      lastOffset: checkpoint.lastOffset,
-      status: checkpoint.status,
-      aiSearchId: checkpoint.aiSearchId,
-    }));
-    const errors = listImportErrors(db, { runId: mostRecent.id }).length;
-
-    return reply.send({
-      data: {
-        run: {
-          id: mostRecent.id,
-          status: mostRecent.status,
-          startedAt: mostRecent.startedAt,
-          updatedAt: mostRecent.updatedAt,
-        },
-        checkpoints,
-        totals: { errors },
-      },
-    });
+    return reply.send({ data: controller.status() });
   });
 
   fastify.get("/api/migration/errors", async (request, reply) => {
@@ -156,7 +89,7 @@ export function registerMigrationControlRoutes(
     }
 
     const { runId, countryCode, resolved } = parsedQuery.data;
-    const rows = listImportErrors(db, {
+    const rows = controller.listErrors({
       runId,
       countryCode,
       resolved: resolved === undefined ? undefined : resolved === "true",
@@ -170,12 +103,14 @@ export function registerMigrationControlRoutes(
       return reply.code(400).send(validationError(parsedParams.error.message));
     }
 
-    const outcome = await retrySingleRecord(deps, parsedParams.data.id);
+    const outcome = await controller.retry(parsedParams.data.id);
     switch (outcome.outcome) {
       case "not_found":
         return reply.code(404).send(notFoundError("import_errors row not found"));
       case "already_resolved":
         return reply.code(409).send(conflictError("import_errors row is already resolved"));
+      case "retry_in_progress":
+        return reply.code(409).send(conflictError("import_errors row retry is already in progress"));
       case "resolved":
         return reply.send({ data: { outcome: "resolved", importError: outcome.importError } });
       case "failed":
