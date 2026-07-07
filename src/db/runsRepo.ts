@@ -39,6 +39,21 @@ export function getActiveRun(db: Database.Database): MigrationRunRow | null {
 }
 
 /**
+ * Reads the most recent migration_runs row regardless of status (running,
+ * paused, completed, stopped, or failed), or null if no run has ever been
+ * created. Unlike `getActiveRun`, a terminal run still counts — this backs
+ * `GET /status`, which must always report the latest run's final state
+ * instead of a "no run" indicator once it finishes or is stopped.
+ */
+export function getMostRecentRun(db: Database.Database): MigrationRunRow | null {
+  const row = db
+    .prepare(`SELECT * FROM migration_runs ORDER BY id DESC LIMIT 1`)
+    .get() as Record<string, unknown> | undefined;
+
+  return row === undefined ? null : mapSqlRowToMigrationRunRow(row);
+}
+
+/**
  * Creates a new migration_runs row with status='running' and returns it.
  * Each CLI invocation of the engine starts exactly one run.
  */

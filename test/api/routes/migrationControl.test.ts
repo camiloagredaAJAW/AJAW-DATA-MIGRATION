@@ -10,8 +10,31 @@ import type { LeadsClientConfig } from "../../../src/leads/leadsClient.js";
 import type { AxelorSessionClient } from "../../../src/axelor/sessionClient.js";
 import type { MigrationEngineDeps, MigrationSummary } from "../../../src/migration/engine.js";
 import { createRun, getRunById, updateRunStatus, getActiveRun } from "../../../src/db/runsRepo.js";
-import { advanceOffset, getByRunCountry, upsertCheckpoint } from "../../../src/db/checkpointRepo.js";
-import { recordError } from "../../../src/db/importErrorRepo.js";
+import {
+  advanceOffset,
+  getByRunCountry,
+  upsertCheckpoint,
+  setAiSearchId,
+} from "../../../src/db/checkpointRepo.js";
+import { recordError, markResolved } from "../../../src/db/importErrorRepo.js";
+
+function seedTitleMapping(db: Database.Database, countryCode: string): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO field_mappings
+       (source_db, source_table, source_column, destination_domain, destination_field,
+        additional_info_key, transform, confidence, note, origin, created_at, updated_at)
+     VALUES (?, 'companies', 'legal_name', 'AiSearchResults', 'title', NULL, NULL, 'high', NULL, 'bootstrap', ?, ?)`,
+  ).run(countryCode, now, now);
+}
+
+function jsonResponse(body: unknown, ok = true): Response {
+  return { ok, status: ok ? 200 : 400, json: async () => body } as unknown as Response;
+}
+
+function textResponse(body: string): Response {
+  return { ok: true, status: 200, json: async () => JSON.parse(body || "{}"), text: async () => body } as unknown as Response;
+}
 
 const migrationsDir = path.join(process.cwd(), "src", "migrations");
 
@@ -453,6 +476,285 @@ describe("GET /api/migration/status", () => {
     const response = await server.inject({ method: "GET", url: "/api/migration/status" });
 
     expect(response.statusCode).toBe(401);
+  });
+
+  it("returns the most recent run's final state after it is stopped, not a null-run indicator", async () => {
+    const db = freshDb();
+    const run = createRun(db);
+    const checkpoint = upsertCheckpoint(db, run.id, "ar");
+    advanceOffset(db, checkpoint.id, 300);
+    updateRunStatus(db, run.id, "stopped");
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/migration/status",
+      headers: validHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json().data;
+    expect(body.run).not.toBeNull();
+    expect(body.run.id).toBe(run.id);
+    expect(body.run.status).toBe("stopped");
+    expect(body.checkpoints).toHaveLength(1);
+    expect(body.checkpoints[0].lastOffset).toBe(300);
+  });
+
+  it("returns the most recent run's final state after it completes naturally", async () => {
+    const db = freshDb();
+    const run = createRun(db);
+    updateRunStatus(db, run.id, "completed");
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/migration/status",
+      headers: validHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json().data;
+    expect(body.run.id).toBe(run.id);
+    expect(body.run.status).toBe("completed");
+  });
+});
+
+describe("GET /api/migration/errors", () => {
+  it("lists all import_errors rows for a run", async () => {
+    const db = freshDb();
+    const run = createRun(db);
+    recordError(db, {
+      runId: run.id,
+      countryCode: "ar",
+      recordOffset: 10,
+      recordIdentifier: "ACME",
+      errorReason: "boom",
+    });
+    recordError(db, {
+      runId: run.id,
+      countryCode: "cl",
+      recordOffset: 20,
+      recordIdentifier: "OTHER",
+      errorReason: "kaboom",
+    });
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+
+    const response = await server.inject({
+      method: "GET",
+      url: `/api/migration/errors?runId=${run.id}`,
+      headers: validHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json().data;
+    expect(body).toHaveLength(2);
+    expect(body.map((row: { countryCode: string }) => row.countryCode).sort()).toEqual([
+      "ar",
+      "cl",
+    ]);
+  });
+
+  it("filters by countryCode", async () => {
+    const db = freshDb();
+    const run = createRun(db);
+    recordError(db, {
+      runId: run.id,
+      countryCode: "ar",
+      recordOffset: 10,
+      recordIdentifier: "ACME",
+      errorReason: "boom",
+    });
+    recordError(db, {
+      runId: run.id,
+      countryCode: "cl",
+      recordOffset: 20,
+      recordIdentifier: "OTHER",
+      errorReason: "kaboom",
+    });
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/migration/errors?countryCode=cl",
+      headers: validHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json().data;
+    expect(body).toHaveLength(1);
+    expect(body[0].countryCode).toBe("cl");
+  });
+
+  it("filters by resolved=false", async () => {
+    const db = freshDb();
+    const run = createRun(db);
+    const unresolved = recordError(db, {
+      runId: run.id,
+      countryCode: "ar",
+      recordOffset: 10,
+      recordIdentifier: "ACME",
+      errorReason: "boom",
+    });
+    const resolvedRow = recordError(db, {
+      runId: run.id,
+      countryCode: "ar",
+      recordOffset: 20,
+      recordIdentifier: "OTHER",
+      errorReason: "kaboom",
+    });
+    markResolved(db, resolvedRow.id);
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/migration/errors?resolved=false",
+      headers: validHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json().data;
+    expect(body).toHaveLength(1);
+    expect(body[0].id).toBe(unresolved.id);
+  });
+
+  it("rejects requests without auth", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+
+    const response = await server.inject({ method: "GET", url: "/api/migration/errors" });
+
+    expect(response.statusCode).toBe(401);
+  });
+});
+
+describe("POST /api/migration/errors/:id/retry", () => {
+  it("returns 404 for a nonexistent error id", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/migration/errors/999999/retry",
+      headers: validHeaders(),
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("returns 409 for an already-resolved error and does not re-fetch", async () => {
+    const db = freshDb();
+    const run = createRun(db);
+    const errorRow = recordError(db, {
+      runId: run.id,
+      countryCode: "ar",
+      recordOffset: 10,
+      recordIdentifier: "ACME",
+      errorReason: "boom",
+    });
+    markResolved(db, errorRow.id);
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/migration/errors/${errorRow.id}/retry`,
+      headers: validHeaders(),
+    });
+
+    expect(response.statusCode).toBe(409);
+  });
+
+  it("rejects requests without auth", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/migration/errors/1/retry",
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("returns 200 with resolved=true when the retry succeeds", async () => {
+    const db = freshDb();
+    seedTitleMapping(db, "AR");
+    const run = createRun(db);
+    const checkpoint = upsertCheckpoint(db, run.id, "AR");
+    setAiSearchId(db, checkpoint.id, 999);
+    const errorRow = recordError(db, {
+      runId: run.id,
+      countryCode: "AR",
+      recordOffset: 5,
+      recordIdentifier: "ACME",
+      errorReason: "boom",
+    });
+
+    const leadsFetchImpl = vi.fn().mockResolvedValueOnce(textResponse(`{"legal_name":"ACME"}`));
+    const axelorFetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ status: 0, data: [{ id: 555 }] }));
+    const deps: MigrationControlDeps = {
+      db,
+      leadsConfig: { ...fakeLeadsConfig(), fetchImpl: leadsFetchImpl as unknown as typeof fetch },
+      axelorConfig: fakeAxelorConfig(),
+      pageLimit: 100,
+      session: fakeSession(),
+      fetchImpl: axelorFetchImpl as unknown as typeof fetch,
+    };
+    const server = buildServer({ db, authConfig, migrationDeps: deps });
+
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/migration/errors/${errorRow.id}/retry`,
+      headers: validHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json().data;
+    expect(body.outcome).toBe("resolved");
+    expect(body.importError.resolved).toBe(true);
+  });
+
+  it("returns 422 with the failure reason when the retry fails again", async () => {
+    const db = freshDb();
+    seedTitleMapping(db, "AR");
+    const run = createRun(db);
+    const checkpoint = upsertCheckpoint(db, run.id, "AR");
+    setAiSearchId(db, checkpoint.id, 999);
+    const errorRow = recordError(db, {
+      runId: run.id,
+      countryCode: "AR",
+      recordOffset: 5,
+      recordIdentifier: "ACME",
+      errorReason: "first failure",
+    });
+
+    const leadsFetchImpl = vi.fn().mockResolvedValueOnce(textResponse(`{"legal_name":"ACME"}`));
+    const axelorFetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ status: 1, data: [] }, true));
+    const deps: MigrationControlDeps = {
+      db,
+      leadsConfig: { ...fakeLeadsConfig(), fetchImpl: leadsFetchImpl as unknown as typeof fetch },
+      axelorConfig: fakeAxelorConfig(),
+      pageLimit: 100,
+      session: fakeSession(),
+      fetchImpl: axelorFetchImpl as unknown as typeof fetch,
+    };
+    const server = buildServer({ db, authConfig, migrationDeps: deps });
+
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/migration/errors/${errorRow.id}/retry`,
+      headers: validHeaders(),
+    });
+
+    expect(response.statusCode).toBe(422);
+    const body = response.json().data;
+    expect(body.outcome).toBe("failed");
+    expect(body.importError.resolved).toBe(false);
+    expect(body.reason).toMatch(/status 1/);
   });
 });
 

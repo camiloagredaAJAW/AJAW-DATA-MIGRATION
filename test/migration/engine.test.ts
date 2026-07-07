@@ -418,4 +418,64 @@ describe("runMigration", () => {
 
     expect(getRunById(db, run.id)?.status).toBe("paused");
   });
+
+  it("carries forward a country's checkpoint offset and AiSearch parent id into a BRAND-NEW run (e.g. /start after /stop), instead of restarting the country from 0", async () => {
+    const db = freshDb();
+    seedCatalog(db, ["AR"]);
+    seedTitleMapping(db, "AR");
+
+    // Run A processed AR up through offset 500 and persisted an AiSearch
+    // parent id, then was stopped (checkpoint left as-is, per spec: stop
+    // does not touch checkpoints).
+    const runA = createRun(db);
+    const checkpointA = upsertCheckpoint(db, runA.id, "AR");
+    advanceOffset(db, checkpointA.id, 500);
+    setAiSearchId(db, checkpointA.id, 999);
+    updateRunStatus(db, runA.id, "stopped");
+
+    // Run B is a DIFFERENT run_id — simulating a fresh POST /start after the
+    // stop. No checkpoint exists yet for (runB.id, "AR"): the engine must
+    // seed it from run A's checkpoint rather than defaulting to offset 0.
+    const runB = createRun(db);
+
+    const leadsFetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(textResponse(jsonLine({ legal_name: "ACME" })));
+
+    const axelorFetchImpl = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith(".AiSearch")) {
+        throw new Error("must not recreate the AiSearch parent — a prior run's id must be reused");
+      }
+      return jsonResponse({ status: 0, data: [{ id: 555 }] });
+    });
+
+    const deps: MigrationEngineDeps = {
+      db,
+      leadsConfig: leadsConfig(leadsFetchImpl as unknown as typeof fetch),
+      axelorConfig: axelorConfig(),
+      pageLimit: 100,
+      session: fakeSession(),
+      fetchImpl: axelorFetchImpl as unknown as typeof fetch,
+      countries: ["AR"],
+      runId: runB.id,
+    };
+
+    await runMigration(deps);
+
+    // The Leads DB fetch for the new run must start at the carried-forward
+    // offset (500), not 0.
+    const firstLeadsCallUrl = leadsFetchImpl.mock.calls[0]?.[0] as string;
+    expect(firstLeadsCallUrl).toContain("offset=500");
+
+    // The new run's own checkpoint row was seeded from run A's (500 + the
+    // single-record page it just processed = 501), not created fresh at
+    // 0/null (which would have left it at 1).
+    const checkpointB = getByRunCountry(db, runB.id, "AR");
+    expect(checkpointB?.lastOffset).toBe(501);
+    expect(checkpointB?.aiSearchId).toBe(999);
+
+    // Run A's own checkpoint is untouched by run B's processing.
+    const reloadedCheckpointA = getByRunCountry(db, runA.id, "AR");
+    expect(reloadedCheckpointA?.lastOffset).toBe(500);
+  });
 });

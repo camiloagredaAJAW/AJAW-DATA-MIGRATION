@@ -6,6 +6,7 @@ import { createRun } from "../../src/db/runsRepo.js";
 import {
   advanceOffset,
   getByRunCountry,
+  getMostRecentCheckpointForCountry,
   listByRun,
   setAiSearchId,
   setStatus,
@@ -62,6 +63,57 @@ describe("upsertCheckpoint", () => {
     expect(() => insert.run(run.id, "ar", 0, "pending", now, now)).toThrowError(
       /UNIQUE constraint failed/,
     );
+  });
+
+  it("seeds last_offset and ai_search_id from the most recent checkpoint for the country when a DIFFERENT run creates a checkpoint for the first time", () => {
+    const db = freshDb();
+    const runA = createRun(db);
+    const checkpointA = upsertCheckpoint(db, runA.id, "ar");
+    advanceOffset(db, checkpointA.id, 500);
+    setAiSearchId(db, checkpointA.id, 777);
+
+    const runB = createRun(db);
+    const checkpointB = upsertCheckpoint(db, runB.id, "ar");
+
+    expect(checkpointB.runId).toBe(runB.id);
+    expect(checkpointB.lastOffset).toBe(500);
+    expect(checkpointB.aiSearchId).toBe(777);
+  });
+
+  it("still defaults to offset 0 / null ai_search_id when NO checkpoint exists yet for the country in any run", () => {
+    const db = freshDb();
+    const run = createRun(db);
+
+    const checkpoint = upsertCheckpoint(db, run.id, "cl");
+
+    expect(checkpoint.lastOffset).toBe(0);
+    expect(checkpoint.aiSearchId).toBeNull();
+  });
+});
+
+describe("getMostRecentCheckpointForCountry", () => {
+  it("returns null when no checkpoint exists yet for the country in any run", () => {
+    const db = freshDb();
+
+    const found = getMostRecentCheckpointForCountry(db, "ar");
+
+    expect(found).toBeNull();
+  });
+
+  it("returns the most recently updated checkpoint for the country across ALL runs", () => {
+    const db = freshDb();
+    const runA = createRun(db);
+    const checkpointA = upsertCheckpoint(db, runA.id, "ar");
+    advanceOffset(db, checkpointA.id, 500);
+
+    const runB = createRun(db);
+    const checkpointB = upsertCheckpoint(db, runB.id, "ar");
+    advanceOffset(db, checkpointB.id, 750);
+
+    const found = getMostRecentCheckpointForCountry(db, "ar");
+
+    expect(found?.runId).toBe(runB.id);
+    expect(found?.lastOffset).toBe(750);
   });
 });
 
