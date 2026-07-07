@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Login — Ajaw Data Migration</title>
+  <link rel="stylesheet" href="/admin/style.css" />
+</head>
+<body>
+  <div class="login-shell">
+    <h1>Admin Login</h1>
+    <p id="login-error" class="error-banner" hidden></p>
+    <form id="login-form" class="stack">
+      <label>
+        Username
+        <input type="text" name="username" autocomplete="username" required />
+      </label>
+      <label>
+        Password
+        <input type="password" name="password" autocomplete="current-password" required />
+      </label>
+      <button type="submit" class="primary">Log in</button>
+    </form>
+  </div>
+
+  <script>
+    // Inline (not app.js): this is the only page reachable without a session,
+    // so it must never depend on the shared app.js helpers that assume an
+    // authenticated fetch is possible.
+    const form = document.getElementById("login-form");
+    const errorBanner = document.getElementById("login-error");
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      errorBanner.hidden = true;
+
+      const formData = new FormData(form);
+      const submitButton = form.querySelector("button[type=submit]");
+      submitButton.disabled = true;
+
+      try {
+        const response = await fetch("/admin/login", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: formData.get("username"),
+            password: formData.get("password"),
+          }),
+        });
+
+        if (response.status === 204) {
+          window.location.replace("/admin/dashboard.html");
+          return;
+        }
+
+        errorBanner.textContent = "Invalid username or password.";
+        errorBanner.hidden = false;
+      } catch (error) {
+        errorBanner.textContent = "Could not reach the server. Try again.";
+        errorBanner.hidden = false;
+      } finally {
+        submitButton.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

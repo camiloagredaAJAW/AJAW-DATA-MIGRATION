@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Errors — Ajaw Data Migration Admin</title>
+  <link rel="stylesheet" href="/admin/style.css" />
+</head>
+<body data-page="errors">
+  <header class="app-header">
+    <nav>
+      <a href="/admin/dashboard.html">Dashboard</a>
+      <a href="/admin/mappings.html">Field Mappings</a>
+      <a href="/admin/errors.html">Errors</a>
+    </nav>
+    <button id="logout-button">Log out</button>
+  </header>
+
+  <main>
+    <h1>Import Errors</h1>
+    <p id="errors-error" class="error-banner" hidden></p>
+
+    <div class="filters-row">
+      <input type="number" id="filter-run-id" placeholder="run id" min="1" />
+      <input type="text" id="filter-country-code" placeholder="country code" />
+      <select id="filter-resolved">
+        <option value="">All</option>
+        <option value="false">Unresolved</option>
+        <option value="true">Resolved</option>
+      </select>
+      <button id="filter-button">Filter</button>
+      <button id="clear-filter-button">Clear</button>
+    </div>
+
+    <table id="errors-table">
+      <thead>
+        <tr>
+          <th>Id</th>
+          <th>Run</th>
+          <th>Country</th>
+          <th>Offset</th>
+          <th>Identifier</th>
+          <th>Reason</th>
+          <th>Resolved</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </main>
+
+  <script src="/admin/app.js"></script>
+</body>
+</html>
