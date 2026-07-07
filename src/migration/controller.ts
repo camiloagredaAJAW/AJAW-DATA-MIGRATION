@@ -45,6 +45,8 @@ export interface MigrationStatusPayload {
   } | null;
   readonly checkpoints: readonly MigrationStatusCheckpoint[];
   readonly totals: { readonly errors: number };
+  /** Static config, not run state — surfaced so the admin UI can show which Axelor instance is the write target. */
+  readonly axelorBaseUrl: string;
 }
 
 export interface MigrationController {
@@ -159,7 +161,7 @@ export function createMigrationController(
     status(): MigrationStatusPayload {
       const mostRecent = getMostRecentRun(db);
       if (mostRecent === null) {
-        return { run: null, checkpoints: [], totals: { errors: 0 } };
+        return { run: null, checkpoints: [], totals: { errors: 0 }, axelorBaseUrl: deps.axelorConfig.baseUrl };
       }
 
       const checkpoints = listByRun(db, mostRecent.id).map((checkpoint) => ({
@@ -179,6 +181,7 @@ export function createMigrationController(
         },
         checkpoints,
         totals: { errors },
+        axelorBaseUrl: deps.axelorConfig.baseUrl,
       };
     },
 

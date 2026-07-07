@@ -167,10 +167,11 @@ async function loadDashboard() {
       showError(errorEl, "Failed to load migration status.");
       return;
     }
-    const { run, checkpoints, totals } = body.data;
+    const { run, checkpoints, totals, axelorBaseUrl } = body.data;
     renderRunSummary(run);
     renderCheckpoints(checkpoints);
     document.getElementById("error-count").textContent = totals.errors;
+    document.getElementById("axelor-target").textContent = axelorBaseUrl;
     applyControlGating(run === null ? null : run.status);
   } catch (error) {
     if (error.message !== "unauthenticated") {

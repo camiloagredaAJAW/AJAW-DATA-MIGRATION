@@ -165,7 +165,12 @@ describe("GET /admin/api/status", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json().data).toEqual({ run: null, checkpoints: [], totals: { errors: 0 } });
+    expect(response.json().data).toEqual({
+      run: null,
+      checkpoints: [],
+      totals: { errors: 0 },
+      axelorBaseUrl: "http://axelor.example.test",
+    });
   });
 
   it("returns the exact same payload as /api/migration/status for an active run", async () => {

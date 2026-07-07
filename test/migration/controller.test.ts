@@ -205,6 +205,7 @@ describe("createMigrationController", () => {
       expect(status.run).toBeNull();
       expect(status.checkpoints).toEqual([]);
       expect(status.totals.errors).toBe(0);
+      expect(status.axelorBaseUrl).toBe("http://axelor.example.test");
     });
 
     it("returns the most recent run's status, per-country checkpoints, and error count", () => {
@@ -228,6 +229,7 @@ describe("createMigrationController", () => {
       expect(status.checkpoints[0]?.countryCode).toBe("ar");
       expect(status.checkpoints[0]?.lastOffset).toBe(250);
       expect(status.totals.errors).toBe(1);
+      expect(status.axelorBaseUrl).toBe("http://axelor.example.test");
     });
   });
 
