@@ -186,6 +186,11 @@ th {
   font-size: 13px;
 }
 
+.muted.success {
+  color: var(--ok);
+  font-weight: 600;
+}
+
 .cell-input {
   width: 100%;
   padding: 4px 6px;

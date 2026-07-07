@@ -28,6 +28,8 @@ const errorsQuerySchema = z.object({
   runId: z.coerce.number().int().positive().optional(),
   countryCode: z.string().optional(),
   resolved: z.enum(["true", "false"]).optional(),
+  limit: z.coerce.number().int().positive().max(200).optional(),
+  offset: z.coerce.number().int().nonnegative().optional(),
 });
 
 const errorIdParamSchema = z.object({
@@ -130,13 +132,15 @@ export function registerAdminBffRoutes(
       return reply.code(400).send(validationError(parsedQuery.error.message));
     }
 
-    const { runId, countryCode, resolved } = parsedQuery.data;
-    const rows = controller.listErrors({
+    const { runId, countryCode, resolved, limit, offset } = parsedQuery.data;
+    const { rows, total } = controller.listErrors({
       runId,
       countryCode,
       resolved: resolved === undefined ? undefined : resolved === "true",
+      limit,
+      offset,
     });
-    return reply.send({ data: rows });
+    return reply.send({ data: rows, total });
   });
 
   fastify.post("/admin/api/errors/:id/retry", async (request, reply) => {

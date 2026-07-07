@@ -78,16 +78,16 @@ export interface ImportErrorFilter {
   readonly runId?: number;
   readonly countryCode?: string;
   readonly resolved?: boolean;
+  readonly limit?: number;
+  readonly offset?: number;
 }
 
-/**
- * Lists import_errors rows, optionally filtered by run, country, and/or
- * resolved status. An empty filter returns every row.
- */
-export function listImportErrors(
-  db: Database.Database,
-  filter: ImportErrorFilter,
-): ImportErrorRow[] {
+interface WhereClause {
+  readonly sql: string;
+  readonly params: unknown[];
+}
+
+function buildWhereClause(filter: Omit<ImportErrorFilter, "limit" | "offset">): WhereClause {
   const clauses: string[] = [];
   const params: unknown[] = [];
 
@@ -104,12 +104,60 @@ export function listImportErrors(
     params.push(filter.resolved ? 1 : 0);
   }
 
-  const whereClause = clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "";
+  return {
+    sql: clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "",
+    params,
+  };
+}
+
+/**
+ * Lists import_errors rows, optionally filtered by run, country, and/or
+ * resolved status. An empty filter returns every row. `limit`/`offset`
+ * are omitted from the SQL entirely when not provided, preserving the
+ * "return everything" behavior existing callers rely on.
+ */
+export function listImportErrors(
+  db: Database.Database,
+  filter: ImportErrorFilter,
+): ImportErrorRow[] {
+  const { sql: whereClause, params } = buildWhereClause(filter);
+
+  // SQLite rejects a bare OFFSET with no LIMIT ("near OFFSET: syntax error"),
+  // so an offset-only filter must still emit a LIMIT clause; -1 is SQLite's
+  // own convention for "no limit".
+  let paginationSql = "";
+  if (filter.limit !== undefined || filter.offset !== undefined) {
+    paginationSql += " LIMIT ?";
+    params.push(filter.limit ?? -1);
+    if (filter.offset !== undefined) {
+      paginationSql += " OFFSET ?";
+      params.push(filter.offset);
+    }
+  }
+
   const rows = db
-    .prepare(`SELECT * FROM import_errors${whereClause} ORDER BY id`)
+    .prepare(`SELECT * FROM import_errors${whereClause} ORDER BY id${paginationSql}`)
     .all(...params) as Record<string, unknown>[];
 
   return rows.map(mapSqlRowToImportErrorRow);
+}
+
+/**
+ * Counts import_errors rows matching the same filter semantics as
+ * `listImportErrors`, without fetching full rows — used for pagination
+ * metadata and for `MigrationController.status()`'s error tally.
+ */
+export function countImportErrors(
+  db: Database.Database,
+  filter: Omit<ImportErrorFilter, "limit" | "offset">,
+): number {
+  const { sql: whereClause, params } = buildWhereClause(filter);
+
+  const row = db
+    .prepare(`SELECT COUNT(*) AS count FROM import_errors${whereClause}`)
+    .get(...params) as { count: number };
+
+  return row.count;
 }
 
 /**

@@ -37,6 +37,9 @@
       Populates the country list the migration engine reads from
       <code>source_catalog</code>. Run this on a fresh database before
       starting a migration, or whenever a new country goes live upstream.
+      This does <strong>not</strong> affect migration runs, checkpoints, or
+      import errors — those are separate operational state, untouched by
+      a catalog refresh.
     </p>
     <div class="controls-row">
       <button id="refresh-catalog-button">Refresh Catalog</button>

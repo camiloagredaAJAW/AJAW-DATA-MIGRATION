@@ -11,18 +11,35 @@ import { describe, expect, it } from "vitest";
 // touch the DOM.
 const require = createRequire(import.meta.url);
 const appJsPath = path.join(process.cwd(), "public", "app.js");
-const { escapeHtml, describeRetryOutcome, computeControlGating, formatRefreshCatalogResult } =
-  require(appJsPath) as {
-    escapeHtml: (value: unknown) => string;
-    describeRetryOutcome: (status: number, body: unknown) => string;
-    computeControlGating: (runStatus: string | null) => {
-      startDisabled: boolean;
-      pauseDisabled: boolean;
-      resumeDisabled: boolean;
-      stopDisabled: boolean;
-    };
-    formatRefreshCatalogResult: (result: { totalCatalogEntries: number; newPairs: unknown[] }) => string;
+const {
+  escapeHtml,
+  describeRetryOutcome,
+  computeControlGating,
+  formatRefreshCatalogResult,
+  computeErrorsPaginationState,
+  computeCorrectedErrorsOffset,
+} = require(appJsPath) as {
+  escapeHtml: (value: unknown) => string;
+  describeRetryOutcome: (status: number, body: unknown) => string;
+  computeControlGating: (runStatus: string | null) => {
+    startDisabled: boolean;
+    pauseDisabled: boolean;
+    resumeDisabled: boolean;
+    stopDisabled: boolean;
   };
+  formatRefreshCatalogResult: (result: { totalCatalogEntries: number; newPairs: unknown[] }) => string;
+  computeErrorsPaginationState: (
+    offset: number,
+    rowCount: number,
+    total: number,
+  ) => { prevDisabled: boolean; nextDisabled: boolean; indicatorText: string };
+  computeCorrectedErrorsOffset: (
+    offset: number,
+    rowCount: number,
+    total: number,
+    pageSize: number,
+  ) => number | null;
+};
 
 describe("escapeHtml", () => {
   it("escapes &, <, > for safe use in an HTML text node", () => {
@@ -140,5 +157,72 @@ describe("computeControlGating", () => {
       resumeDisabled: true,
       stopDisabled: true,
     });
+  });
+});
+
+describe("computeErrorsPaginationState", () => {
+  it("disables Prev at offset 0 and enables Next when more rows remain", () => {
+    expect(computeErrorsPaginationState(0, 50, 234)).toEqual({
+      prevDisabled: true,
+      nextDisabled: false,
+      indicatorText: "Showing 1-50 of 234",
+    });
+  });
+
+  it("enables Prev once past the first page", () => {
+    expect(computeErrorsPaginationState(50, 50, 234)).toEqual({
+      prevDisabled: false,
+      nextDisabled: false,
+      indicatorText: "Showing 51-100 of 234",
+    });
+  });
+
+  it("disables Next on the last page (offset + rowCount >= total)", () => {
+    expect(computeErrorsPaginationState(200, 34, 234)).toEqual({
+      prevDisabled: false,
+      nextDisabled: true,
+      indicatorText: "Showing 201-234 of 234",
+    });
+  });
+
+  it("shows a zero-rows indicator and disables both buttons when there are no matching rows", () => {
+    expect(computeErrorsPaginationState(0, 0, 0)).toEqual({
+      prevDisabled: true,
+      nextDisabled: true,
+      indicatorText: "No errors",
+    });
+  });
+
+  it("produces an inverted 'Showing 51-50 of 49' indicator for rowCount=0 with offset>0 and total>0 — this function is not the layer that fixes that; `loadErrors` (via `computeCorrectedErrorsOffset`) detects this exact condition and retries at a corrected offset before this function is ever asked to render it", () => {
+    expect(computeErrorsPaginationState(50, 0, 49)).toEqual({
+      prevDisabled: false,
+      nextDisabled: true,
+      indicatorText: "Showing 51-50 of 49",
+    });
+  });
+});
+
+describe("computeCorrectedErrorsOffset", () => {
+  it("steps back one page when the page emptied out but earlier pages still have rows", () => {
+    // The scenario this exists for: viewing resolved=false errors on page 2
+    // (offset 50), the last unresolved error on that page gets retried, the
+    // next fetch at offset 50 returns 0 rows even though 49 rows remain.
+    expect(computeCorrectedErrorsOffset(50, 0, 49, 50)).toBe(50 - 50);
+  });
+
+  it("clamps the corrected offset to 0 rather than going negative", () => {
+    expect(computeCorrectedErrorsOffset(50, 0, 49, 100)).toBe(0);
+  });
+
+  it("returns null when the page has rows (no correction needed)", () => {
+    expect(computeCorrectedErrorsOffset(50, 3, 53, 50)).toBeNull();
+  });
+
+  it("returns null when offset is already 0 (nowhere earlier to step back to)", () => {
+    expect(computeCorrectedErrorsOffset(0, 0, 0, 50)).toBeNull();
+  });
+
+  it("returns null when total is also 0 (there really are no matching rows at all)", () => {
+    expect(computeCorrectedErrorsOffset(50, 0, 0, 50)).toBeNull();
   });
 });

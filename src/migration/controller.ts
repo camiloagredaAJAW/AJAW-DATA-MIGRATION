@@ -7,7 +7,12 @@ import {
   type MigrationRunRow,
 } from "../db/runsRepo.js";
 import { listByRun, type MigrationCheckpointStatus } from "../db/checkpointRepo.js";
-import { listImportErrors, type ImportErrorFilter, type ImportErrorRow } from "../db/importErrorRepo.js";
+import {
+  listImportErrors,
+  countImportErrors,
+  type ImportErrorFilter,
+  type ImportErrorRow,
+} from "../db/importErrorRepo.js";
 import { retrySingleRecord, type RetryOutcome } from "./retry.js";
 import { runMigration, type MigrationEngineDeps, type MigrationSummary } from "./engine.js";
 import { runRefreshCatalog, type RefreshCatalogResult } from "../cli/bootstrap.js";
@@ -49,13 +54,18 @@ export interface MigrationStatusPayload {
   readonly axelorBaseUrl: string;
 }
 
+export interface ListErrorsResult {
+  readonly rows: ImportErrorRow[];
+  readonly total: number;
+}
+
 export interface MigrationController {
   start(): ControlActionOutcome;
   pause(): ControlActionOutcome;
   resume(): ControlActionOutcome;
   stop(): ControlActionOutcome;
   status(): MigrationStatusPayload;
-  listErrors(filter: ImportErrorFilter): ImportErrorRow[];
+  listErrors(filter: ImportErrorFilter): ListErrorsResult;
   /**
    * Rejects with `{ outcome: "retry_in_progress" }` when a retry for the
    * same `errorId` is already in flight (see `inFlightRetries` in the
@@ -170,7 +180,7 @@ export function createMigrationController(
         status: checkpoint.status,
         aiSearchId: checkpoint.aiSearchId,
       }));
-      const errors = listImportErrors(db, { runId: mostRecent.id }).length;
+      const errors = countImportErrors(db, { runId: mostRecent.id });
 
       return {
         run: {
@@ -185,8 +195,12 @@ export function createMigrationController(
       };
     },
 
-    listErrors(filter: ImportErrorFilter): ImportErrorRow[] {
-      return listImportErrors(db, filter);
+    listErrors(filter: ImportErrorFilter): ListErrorsResult {
+      const { limit, offset, ...countFilter } = filter;
+      return {
+        rows: listImportErrors(db, filter),
+        total: countImportErrors(db, countFilter),
+      };
     },
 
     async retry(errorId: number): Promise<RetryOutcome> {

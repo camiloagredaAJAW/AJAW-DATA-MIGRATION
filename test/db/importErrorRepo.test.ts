@@ -6,6 +6,7 @@ import { createRun } from "../../src/db/runsRepo.js";
 import {
   recordError,
   listImportErrors,
+  countImportErrors,
   getImportErrorById,
   markResolved,
   updateErrorReason,
@@ -218,6 +219,165 @@ describe("listImportErrors", () => {
     expect(unresolved[0]?.errorReason).toBe("boom-unresolved");
     expect(resolved).toHaveLength(1);
     expect(resolved[0]?.errorReason).toBe("boom-resolved");
+  });
+
+  it("respects limit/offset, returning the requested page in id order", () => {
+    const db = freshDb();
+    const run = createRun(db);
+    const seeded = [];
+    for (let i = 0; i < 5; i++) {
+      seeded.push(
+        recordError(db, {
+          runId: run.id,
+          countryCode: "ar",
+          recordOffset: i,
+          recordIdentifier: null,
+          errorReason: `boom-${i}`,
+        }),
+      );
+    }
+
+    const page = listImportErrors(db, { limit: 2, offset: 2 });
+
+    expect(page).toHaveLength(2);
+    expect(page.map((row) => row.id)).toEqual([seeded[2]?.id, seeded[3]?.id]);
+  });
+
+  it("accepts an offset with no limit (SQLite rejects a bare OFFSET with no LIMIT)", () => {
+    const db = freshDb();
+    const run = createRun(db);
+    const seeded = [];
+    for (let i = 0; i < 5; i++) {
+      seeded.push(
+        recordError(db, {
+          runId: run.id,
+          countryCode: "ar",
+          recordOffset: i,
+          recordIdentifier: null,
+          errorReason: `boom-${i}`,
+        }),
+      );
+    }
+
+    const page = listImportErrors(db, { offset: 3 });
+
+    expect(page.map((row) => row.id)).toEqual([seeded[3]?.id, seeded[4]?.id]);
+  });
+
+  it("returns an empty array (not an error) when offset exceeds the total matching row count", () => {
+    const db = freshDb();
+    const run = createRun(db);
+    for (let i = 0; i < 5; i++) {
+      recordError(db, {
+        runId: run.id,
+        countryCode: "ar",
+        recordOffset: i,
+        recordIdentifier: null,
+        errorReason: `boom-${i}`,
+      });
+    }
+
+    const page = listImportErrors(db, { offset: 100 });
+
+    expect(page).toEqual([]);
+    // countImportErrors must keep reporting the real, non-zero total —
+    // pagination metadata (e.g. `total` in the errors API response) must not
+    // be affected by an out-of-range page request.
+    expect(countImportErrors(db, {})).toBe(5);
+  });
+
+  it("returns everything when limit/offset are omitted (backward compat)", () => {
+    const db = freshDb();
+    const run = createRun(db);
+    for (let i = 0; i < 5; i++) {
+      recordError(db, {
+        runId: run.id,
+        countryCode: "ar",
+        recordOffset: i,
+        recordIdentifier: null,
+        errorReason: `boom-${i}`,
+      });
+    }
+
+    const rows = listImportErrors(db, {});
+
+    expect(rows).toHaveLength(5);
+  });
+});
+
+describe("countImportErrors", () => {
+  it("counts all rows when no filter is given", () => {
+    const db = freshDb();
+    const run = createRun(db);
+    recordError(db, {
+      runId: run.id,
+      countryCode: "ar",
+      recordOffset: 1,
+      recordIdentifier: null,
+      errorReason: "boom-ar",
+    });
+    recordError(db, {
+      runId: run.id,
+      countryCode: "cl",
+      recordOffset: 2,
+      recordIdentifier: null,
+      errorReason: "boom-cl",
+    });
+
+    expect(countImportErrors(db, {})).toBe(2);
+  });
+
+  it("matches the same filter semantics as listImportErrors (runId/countryCode/resolved)", () => {
+    const db = freshDb();
+    const run1 = createRun(db);
+    const run2 = createRun(db);
+    const resolvedError = recordError(db, {
+      runId: run1.id,
+      countryCode: "ar",
+      recordOffset: 1,
+      recordIdentifier: null,
+      errorReason: "boom-run1-ar",
+    });
+    recordError(db, {
+      runId: run1.id,
+      countryCode: "cl",
+      recordOffset: 2,
+      recordIdentifier: null,
+      errorReason: "boom-run1-cl",
+    });
+    recordError(db, {
+      runId: run2.id,
+      countryCode: "ar",
+      recordOffset: 3,
+      recordIdentifier: null,
+      errorReason: "boom-run2-ar",
+    });
+    markResolved(db, resolvedError.id);
+
+    expect(countImportErrors(db, { runId: run1.id })).toBe(2);
+    expect(countImportErrors(db, { countryCode: "ar" })).toBe(2);
+    expect(countImportErrors(db, { resolved: true })).toBe(1);
+    expect(countImportErrors(db, { resolved: false })).toBe(2);
+  });
+
+  it("counts the FULL matching set even when a limit/offset would be used for the page", () => {
+    const db = freshDb();
+    const run = createRun(db);
+    for (let i = 0; i < 5; i++) {
+      recordError(db, {
+        runId: run.id,
+        countryCode: "ar",
+        recordOffset: i,
+        recordIdentifier: null,
+        errorReason: `boom-${i}`,
+      });
+    }
+
+    const page = listImportErrors(db, { runId: run.id, limit: 2, offset: 0 });
+    const total = countImportErrors(db, { runId: run.id });
+
+    expect(page).toHaveLength(2);
+    expect(total).toBe(5);
   });
 });
 

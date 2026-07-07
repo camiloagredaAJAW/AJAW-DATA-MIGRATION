@@ -253,10 +253,31 @@ describe("createMigrationController", () => {
       });
       const controller = createMigrationController(db, fakeDeps(db));
 
-      const rows = controller.listErrors({ countryCode: "cl" });
+      const { rows, total } = controller.listErrors({ countryCode: "cl" });
 
       expect(rows).toHaveLength(1);
       expect(rows[0]?.countryCode).toBe("cl");
+      expect(total).toBe(1);
+    });
+
+    it("returns a total reflecting the FULL matching count even when rows is a smaller page", () => {
+      const db = freshDb();
+      const run = createRun(db);
+      for (let i = 0; i < 5; i++) {
+        recordError(db, {
+          runId: run.id,
+          countryCode: "ar",
+          recordOffset: i,
+          recordIdentifier: null,
+          errorReason: `boom-${i}`,
+        });
+      }
+      const controller = createMigrationController(db, fakeDeps(db));
+
+      const { rows, total } = controller.listErrors({ runId: run.id, limit: 2, offset: 0 });
+
+      expect(rows).toHaveLength(2);
+      expect(total).toBe(5);
     });
   });
 

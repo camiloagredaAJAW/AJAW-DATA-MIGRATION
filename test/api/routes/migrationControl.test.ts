@@ -626,6 +626,84 @@ describe("GET /api/migration/errors", () => {
 
     expect(response.statusCode).toBe(401);
   });
+
+  it("returns a page via limit/offset alongside the total matching count", async () => {
+    const db = freshDb();
+    const run = createRun(db);
+    for (let i = 0; i < 5; i++) {
+      recordError(db, {
+        runId: run.id,
+        countryCode: "ar",
+        recordOffset: i,
+        recordIdentifier: null,
+        errorReason: `boom-${i}`,
+      });
+    }
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+
+    const response = await server.inject({
+      method: "GET",
+      url: `/api/migration/errors?runId=${run.id}&limit=2&offset=2`,
+      headers: validHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.data).toHaveLength(2);
+    expect(body.total).toBe(5);
+  });
+
+  it("returns everything when limit/offset are omitted (backward compat)", async () => {
+    const db = freshDb();
+    const run = createRun(db);
+    for (let i = 0; i < 3; i++) {
+      recordError(db, {
+        runId: run.id,
+        countryCode: "ar",
+        recordOffset: i,
+        recordIdentifier: null,
+        errorReason: `boom-${i}`,
+      });
+    }
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+
+    const response = await server.inject({
+      method: "GET",
+      url: `/api/migration/errors?runId=${run.id}`,
+      headers: validHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.data).toHaveLength(3);
+    expect(body.total).toBe(3);
+  });
+
+  it("returns 400 for a limit over 200", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/migration/errors?limit=201",
+      headers: validHeaders(),
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("returns 400 for a negative offset", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/migration/errors?offset=-1",
+      headers: validHeaders(),
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
 });
 
 describe("POST /api/migration/errors/:id/retry", () => {

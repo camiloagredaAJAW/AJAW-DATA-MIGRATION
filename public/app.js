@@ -215,6 +215,7 @@ async function refreshCatalog() {
   const resultEl = document.getElementById("refresh-catalog-result");
   const errorEl = document.getElementById("dashboard-error");
   hideError(errorEl);
+  resultEl.classList.remove("success");
   resultEl.textContent = "Refreshing...";
   button.disabled = true;
 
@@ -226,6 +227,7 @@ async function refreshCatalog() {
       return;
     }
     resultEl.textContent = formatRefreshCatalogResult(body.data);
+    resultEl.classList.add("success");
   } catch (error) {
     if (error.message !== "unauthenticated") {
       console.error(error);
@@ -355,6 +357,56 @@ function initMappingsPage() {
 // Errors
 // ---------------------------------------------------------------------------
 
+const ERRORS_PAGE_SIZE = 50;
+let errorsOffset = 0;
+// The last offset that was actually rendered successfully — distinct from
+// `errorsOffset`, which a Prev/Next click mutates *before* `loadErrors()` is
+// called. If that fetch then fails, `loadErrors()` rolls `errorsOffset` back
+// to this value rather than leaving it permanently advanced/retreated.
+let confirmedErrorsOffset = 0;
+// Last successfully rendered page's row count/total, used to restore correct
+// Prev/Next button gating after a failed `loadErrors()` call (see `finally`
+// block below) without re-deriving it from a stale DOM read.
+let lastErrorsRowCount = 0;
+let lastErrorsTotal = 0;
+
+/**
+ * Pure decision function for the Prev/Next gating and page-indicator text,
+ * extracted so it's unit-testable without a DOM — mirrors
+ * `computeControlGating` above. `rowCount` is the current page's row count
+ * (not `ERRORS_PAGE_SIZE`) since the last page is typically shorter.
+ */
+function computeErrorsPaginationState(offset, rowCount, total) {
+  if (total === 0) {
+    return { prevDisabled: true, nextDisabled: true, indicatorText: "No errors" };
+  }
+  return {
+    prevDisabled: offset === 0,
+    nextDisabled: offset + rowCount >= total,
+    indicatorText: `Showing ${offset + 1}-${offset + rowCount} of ${total}`,
+  };
+}
+
+/**
+ * When a page empties out from under the current offset (e.g. an operator
+ * viewing `resolved=false` errors, page 2, retries the only remaining
+ * unresolved error on that page), the next fetch at the same stale offset
+ * returns `rowCount === 0` even though earlier pages still have rows —
+ * `computeErrorsPaginationState` would then render a nonsensical inverted
+ * range (e.g. "Showing 51-50 of 49"). Returns the offset `loadErrors` should
+ * retry at (stepping back exactly one page, clamped at 0 — not an exact
+ * "true last page" calculation, which isn't needed since one page-size step
+ * back is always a valid, in-range offset), or `null` when no correction is
+ * needed. Pure and DOM-independent so the correction math is unit-testable
+ * without a fetch/DOM harness — see test/public/app.test.ts.
+ */
+function computeCorrectedErrorsOffset(offset, rowCount, total, pageSize) {
+  if (rowCount === 0 && total > 0 && offset > 0) {
+    return Math.max(0, offset - pageSize);
+  }
+  return null;
+}
+
 function renderErrorsTable(rows) {
   const tbody = document.querySelector("#errors-table tbody");
   tbody.innerHTML = "";
@@ -378,7 +430,41 @@ function renderErrorsTable(rows) {
   }
 }
 
-async function loadErrors() {
+function applyErrorsPaginationState(rowCount, total) {
+  lastErrorsRowCount = rowCount;
+  lastErrorsTotal = total;
+  const { prevDisabled, nextDisabled, indicatorText } = computeErrorsPaginationState(
+    errorsOffset,
+    rowCount,
+    total,
+  );
+  document.getElementById("errors-prev-button").disabled = prevDisabled;
+  document.getElementById("errors-next-button").disabled = nextDisabled;
+  document.getElementById("errors-page-indicator").textContent = indicatorText;
+}
+
+/**
+ * Disables/re-enables the Prev/Next/Filter/Clear controls while a
+ * `loadErrors()` request is in flight — mirrors the disable-during-request
+ * pattern already used for `refresh-catalog-button` in `refreshCatalog`.
+ * Guards against a slower-resolving earlier request's response landing after
+ * a faster-resolving later one (and against a fetch failure leaving
+ * `errorsOffset` advanced with no way to correct it): a single admin
+ * operator can only have one of these requests in flight at a time.
+ */
+function setErrorsControlsDisabled(disabled) {
+  document.getElementById("errors-prev-button").disabled = disabled;
+  document.getElementById("errors-next-button").disabled = disabled;
+  document.getElementById("filter-button").disabled = disabled;
+  document.getElementById("clear-filter-button").disabled = disabled;
+}
+
+/**
+ * `isOffsetCorrectionRetry` is only ever passed `true` by the recursive
+ * self-call below, guarding against infinite recursion: the correction is
+ * applied at most once per user-triggered call.
+ */
+async function loadErrors(isOffsetCorrectionRetry = false) {
   const errorEl = document.getElementById("errors-error");
   hideError(errorEl);
   const runId = document.getElementById("filter-run-id").value.trim();
@@ -389,7 +475,11 @@ async function loadErrors() {
   if (runId !== "") params.set("runId", runId);
   if (countryCode !== "") params.set("countryCode", countryCode);
   if (resolved !== "") params.set("resolved", resolved);
+  params.set("limit", String(ERRORS_PAGE_SIZE));
+  params.set("offset", String(errorsOffset));
   const query = params.toString();
+
+  setErrorsControlsDisabled(true);
 
   try {
     const { ok, body } = await adminFetchJson(`/admin/api/errors${query ? `?${query}` : ""}`);
@@ -397,12 +487,36 @@ async function loadErrors() {
       showError(errorEl, "Failed to load import errors.");
       return;
     }
+
+    const correctedOffset = isOffsetCorrectionRetry
+      ? null
+      : computeCorrectedErrorsOffset(errorsOffset, body.data.length, body.total, ERRORS_PAGE_SIZE);
+    if (correctedOffset !== null) {
+      errorsOffset = correctedOffset;
+      await loadErrors(true);
+      return;
+    }
+
+    confirmedErrorsOffset = errorsOffset;
     renderErrorsTable(body.data);
+    applyErrorsPaginationState(body.data.length, body.total);
   } catch (error) {
+    // A fetch failure after a Prev/Next click already advanced/retreated
+    // `errorsOffset` would otherwise leave it permanently pointing at a
+    // phantom page. Roll back to the last offset that actually rendered
+    // successfully so the next successful `loadErrors()` resumes correctly.
+    errorsOffset = confirmedErrorsOffset;
     if (error.message !== "unauthenticated") {
       console.error(error);
       showError(errorEl, "Could not reach the server.");
     }
+  } finally {
+    setErrorsControlsDisabled(false);
+    // Re-derive Prev/Next gating from the last known-good page state: a
+    // no-op on the success path (already set above with the same values),
+    // and a restoration to the correct enabled/disabled state on failure,
+    // where the try block above never called `applyErrorsPaginationState`.
+    applyErrorsPaginationState(lastErrorsRowCount, lastErrorsTotal);
   }
 }
 
@@ -440,11 +554,23 @@ async function retryError(row) {
 }
 
 function initErrorsPage() {
-  document.getElementById("filter-button").addEventListener("click", loadErrors);
+  document.getElementById("filter-button").addEventListener("click", () => {
+    errorsOffset = 0;
+    loadErrors();
+  });
   document.getElementById("clear-filter-button").addEventListener("click", () => {
     document.getElementById("filter-run-id").value = "";
     document.getElementById("filter-country-code").value = "";
     document.getElementById("filter-resolved").value = "";
+    errorsOffset = 0;
+    loadErrors();
+  });
+  document.getElementById("errors-prev-button").addEventListener("click", () => {
+    errorsOffset = Math.max(0, errorsOffset - ERRORS_PAGE_SIZE);
+    loadErrors();
+  });
+  document.getElementById("errors-next-button").addEventListener("click", () => {
+    errorsOffset += ERRORS_PAGE_SIZE;
     loadErrors();
   });
   document.querySelector("#errors-table tbody").addEventListener("click", (event) => {
@@ -488,5 +614,12 @@ if (typeof document !== "undefined") {
 // under this repo's root `"type": "module"` package.json — the browser never
 // reads either package.json, so it's unaffected either way.
 if (typeof module !== "undefined") {
-  module.exports = { escapeHtml, describeRetryOutcome, computeControlGating, formatRefreshCatalogResult };
+  module.exports = {
+    escapeHtml,
+    describeRetryOutcome,
+    computeControlGating,
+    formatRefreshCatalogResult,
+    computeErrorsPaginationState,
+    computeCorrectedErrorsOffset,
+  };
 }
