@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { migrate } from "../../src/db/migrate.js";
-import { cleanupOrphanedRuns } from "../../src/api/server.js";
+import { buildServer, cleanupOrphanedRuns } from "../../src/api/server.js";
 import { createRun, updateRunStatus, getRunById } from "../../src/db/runsRepo.js";
+import type { AuthConfig } from "../../src/api/auth/authGuard.js";
 
 const migrationsDir = path.join(process.cwd(), "src", "migrations");
 
@@ -11,6 +12,23 @@ function freshDb(): Database.Database {
   const db = new Database(":memory:");
   migrate(db, migrationsDir);
   return db;
+}
+
+const authConfig: AuthConfig = {
+  username: "admin",
+  password: "s3cret",
+  internalApiKey: "internal-key-123",
+};
+
+function basicAuthHeader(username: string, password: string): string {
+  return `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
+}
+
+function validHeaders(): Record<string, string> {
+  return {
+    authorization: basicAuthHeader(authConfig.username, authConfig.password),
+    "x-internal-api-key": authConfig.internalApiKey,
+  };
 }
 
 describe("cleanupOrphanedRuns", () => {
@@ -56,5 +74,89 @@ describe("cleanupOrphanedRuns", () => {
 
     expect(transitioned).toEqual([]);
     expect(getRunById(db, run.id)?.status).toBe("completed");
+  });
+});
+
+describe("buildServer /api scope encapsulation", () => {
+  it("still rejects /api/* requests without auth (behavior-preserving)", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig });
+
+    const response = await server.inject({ method: "GET", url: "/api/field-mappings" });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("still accepts /api/* requests with valid auth (behavior-preserving)", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/field-mappings",
+      headers: validHeaders(),
+    });
+
+    expect(response.statusCode).toBe(200);
+  });
+
+  it("does not leak the /api Basic Auth guard onto a sibling route registered outside the /api scope", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig });
+    server.get("/sibling-outside-api-scope", async () => ({ ok: true }));
+    await server.ready();
+
+    const response = await server.inject({ method: "GET", url: "/sibling-outside-api-scope" });
+
+    expect(response.statusCode).toBe(200);
+  });
+});
+
+describe("buildServer /admin scope wiring", () => {
+  it("exposes POST /admin/login and sets a session cookie on success", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/login",
+      payload: { username: authConfig.username, password: authConfig.password },
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(response.headers["set-cookie"]).toBeDefined();
+  });
+
+  it("does not let a valid /admin session cookie authenticate against /api/*", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig });
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/admin/login",
+      payload: { username: authConfig.username, password: authConfig.password },
+    });
+    const cookie = login.headers["set-cookie"];
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/field-mappings",
+      headers: { cookie: Array.isArray(cookie) ? cookie.join("; ") : String(cookie) },
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("does not let valid /api/* Basic Auth + API key credentials authenticate against /admin/api/*", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/admin/api/session",
+      headers: validHeaders(),
+    });
+
+    expect(response.statusCode).toBe(401);
   });
 });
