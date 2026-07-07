@@ -1,0 +1,12 @@
+node_modules
+data
+.env
+.env.example
+.git
+.atl
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+solicitudes-lenguaje-natural.txt
+solicitudes-lenguaje-natural.txt.bak

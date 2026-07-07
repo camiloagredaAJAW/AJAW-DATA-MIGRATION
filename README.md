@@ -71,6 +71,37 @@ lightweight — it only fetches the country list, unlike `sample --refresh`
 mappings. Only countries present in **both** `source_catalog` and
 `field_mappings` actually get migrated.
 
+## Docker / deployment
+
+`Dockerfile` builds a single-stage image (`node:20-slim` — glibc, so
+`better-sqlite3` installs from a prebuilt binary instead of compiling from
+source) and starts the container with `npm run migrate && npm run seed &&
+npm run dev:api`. Both `migrate` and `seed` are idempotent, so this is safe
+to run on every container start/redeploy, not just the first one.
+
+Two things a deploy platform (e.g. EasyPanel) needs to provide:
+
+- **A persistent volume mounted at `/app/data`** (the container's
+  `SQLITE_PATH` default parent directory) — without it, every redeploy starts
+  from an empty database, silently discarding field mappings, run history,
+  and checkpoints.
+- **All the env vars listed in `.env.example`**, set through the platform's
+  environment configuration — never baked into the image or committed.
+
+Local build/run smoke test (no real Axelor/Leads DB access needed to confirm
+the image boots and serves the admin UI):
+
+```bash
+docker build -t ajaw-data-migration .
+docker run --rm -p 3000:3000 --env-file .env -v "$(pwd)/data:/app/data" ajaw-data-migration
+```
+
+If Axelor is reachable at a real subdomain with a platform-issued certificate
+(as opposed to a local mkcert-signed one), TLS should verify normally with no
+extra config — the "unable to verify the first certificate" error seen in
+local dev is specific to the local self-signed setup, not expected to
+reappear once both services are deployed behind real certs.
+
 ## Documentation map
 
 | Doc | Covers |
