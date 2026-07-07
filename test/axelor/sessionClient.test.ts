@@ -12,7 +12,7 @@ function baseConfig(): AxelorConfig {
   };
 }
 
-function loginResponse(cookies: string[], ok = true, status = 200, bodyText = ""): Response {
+function loginResponse(cookies: string[], ok = true, status = 200): Response {
   return {
     ok,
     status,
@@ -20,7 +20,6 @@ function loginResponse(cookies: string[], ok = true, status = 200, bodyText = ""
       getSetCookie: () => cookies,
       get: () => null,
     },
-    text: () => Promise.resolve(bodyText),
   } as unknown as Response;
 }
 
@@ -70,31 +69,32 @@ describe("createSessionClient", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
-  it("throws a descriptive error when login responds with a non-ok status", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(loginResponse([], false, 401));
-    const client = createSessionClient(baseConfig(), fetchImpl as unknown as typeof fetch);
-
-    await expect(client.getSession()).rejects.toThrow(/401/);
-  });
-
-  it("includes the response body in the error when login fails", async () => {
+  it("succeeds despite a non-ok HTTP status as long as JSESSIONID is present", async () => {
+    // This deployment's login.jsp can return a non-2xx status with an HTML
+    // body (apparently from a downstream template render) while still having
+    // correctly committed the session cookies beforehand -- status/body are
+    // not reliable signals here, only the cookies are.
     const fetchImpl = vi
       .fn()
-      .mockResolvedValue(loginResponse([], false, 500, "java.lang.NullPointerException at ..."));
-    const client = createSessionClient(baseConfig(), fetchImpl as unknown as typeof fetch);
+      .mockResolvedValue(loginResponse(["JSESSIONID=abc123; Path=/; HttpOnly"], false, 500));
 
-    await expect(client.getSession()).rejects.toThrow(/NullPointerException/);
+    const client = createSessionClient(baseConfig(), fetchImpl as unknown as typeof fetch);
+    const session = await client.getSession();
+
+    expect(session.cookieHeader).toBe("JSESSIONID=abc123");
   });
 
-  it("still throws the status-code error when the response body cannot be read", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 500,
-      headers: { getSetCookie: () => [], get: () => null },
-      text: () => Promise.reject(new Error("stream already consumed")),
-    } as unknown as Response);
+  it("throws when no JSESSIONID cookie comes back, regardless of status", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(loginResponse(["TENANTID=main; Path=/"], false, 500));
     const client = createSessionClient(baseConfig(), fetchImpl as unknown as typeof fetch);
 
-    await expect(client.getSession()).rejects.toThrow(/500/);
+    await expect(client.getSession()).rejects.toThrow(/JSESSIONID/);
+  });
+
+  it("throws when login returns 200 but no cookies at all", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(loginResponse([], true, 200));
+    const client = createSessionClient(baseConfig(), fetchImpl as unknown as typeof fetch);
+
+    await expect(client.getSession()).rejects.toThrow(/JSESSIONID/);
   });
 });

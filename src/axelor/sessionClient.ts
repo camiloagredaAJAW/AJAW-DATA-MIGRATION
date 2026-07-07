@@ -31,6 +31,13 @@ function buildAuthHeader(config: AxelorConfig): string {
  * `Set-Cookie` string is trimmed down to its `name=value` pair (dropping
  * `Path`/`HttpOnly`/etc. attributes) and joined with `; ` for reuse as a
  * request `Cookie` header.
+ *
+ * Requires `JSESSIONID` specifically (not just "any cookie") — on this
+ * deployment, `login.jsp`'s HTTP status and response body are not reliable
+ * (it can return a non-2xx status with an HTML page, apparently from a
+ * downstream template render, while still correctly committing the session
+ * cookies beforehand). The cookies are the only trustworthy success signal;
+ * status/body are deliberately never consulted here.
  */
 function extractCookieHeader(response: Response): string {
   const headers = response.headers as Headers & { getSetCookie?: () => string[] };
@@ -42,8 +49,11 @@ function extractCookieHeader(response: Response): string {
           return combined ? [combined] : [];
         })();
 
-  if (rawCookies.length === 0) {
-    throw new Error("Axelor login response did not include a session cookie");
+  const hasJSessionId = rawCookies.some((raw) => /^JSESSIONID=/i.test(raw.trim()));
+  if (!hasJSessionId) {
+    throw new Error(
+      `Axelor login response did not include a JSESSIONID cookie (status ${response.status})`,
+    );
   }
 
   return rawCookies.map((raw) => raw.split(";")[0]!.trim()).join("; ");
@@ -75,19 +85,10 @@ export function createSessionClient(
       body: "",
     });
 
-    if (!response.ok) {
-      // login.jsp is a servlet endpoint — a non-2xx response body (HTML error
-      // page, stack trace, JSON error) almost always carries the actual
-      // reason a generic status code hides. Best-effort: response bodies
-      // aren't guaranteed readable twice, so a read failure here must never
-      // mask the original status-code error.
-      const bodyPreview = await response
-        .text()
-        .then((text) => text.slice(0, 500))
-        .catch(() => "<unreadable response body>");
-      throw new Error(`Axelor login failed with status ${response.status}: ${bodyPreview}`);
-    }
-
+    // Deliberately no `response.ok` gate: this deployment's login.jsp can
+    // return a non-2xx status (e.g. 500) with an HTML body while still having
+    // correctly set the session cookies before that status was produced.
+    // extractCookieHeader() is the actual success/failure signal.
     return { authHeader, cookieHeader: extractCookieHeader(response) };
   }
 
