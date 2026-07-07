@@ -108,6 +108,11 @@ Missing or invalid credentials on either check return `401` with no data.
 Create and delete are intentionally not exposed via the API in this slice —
 the registry is bootstrapped/seeded, not manually authored from scratch.
 
+The same edit (`destinationField`/`transform`) is also available from the
+browser at `/admin/mappings.html` (session-cookie auth, see the top-level
+README's Stack section) without handling these `curl`-level credentials —
+both surfaces call the identical repo functions in-process.
+
 Example:
 
 ```bash

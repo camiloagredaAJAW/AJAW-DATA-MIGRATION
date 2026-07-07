@@ -11,6 +11,7 @@ import {
   type MigrationControlDeps,
 } from "./routes/migrationControl.js";
 import { createMigrationController } from "../migration/controller.js";
+import { adminPlugin } from "./admin/adminPlugin.js";
 import type { MigrationEngineDeps, MigrationSummary } from "../migration/engine.js";
 import { buildMigrationDeps } from "../cli/migrate.js";
 import { updateRunStatus } from "../db/runsRepo.js";
@@ -47,7 +48,10 @@ export interface BuildServerOptions {
  * (tests).
  */
 export function buildServer(options: BuildServerOptions): FastifyInstance {
-  const fastify = Fastify({ logger: false });
+  // Silenced under `vitest run` (NODE_ENV=test) to keep test output clean;
+  // the /admin auth guard relies on request.log.warn for brute-force/CSRF
+  // visibility, which is a no-op without a real logger instance.
+  const fastify = Fastify({ logger: process.env.NODE_ENV !== "test" });
   // Built once here (not inside registerMigrationControlRoutes) so a future
   // `/admin/*` scope can share this exact instance instead of running a
   // second, independent registry against the same DB.
@@ -65,6 +69,10 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       registerMigrationControlRoutes(api, controller);
     }
   });
+  // Sibling scope: its own session-cookie auth, entirely separate from the
+  // /api Basic Auth guard above (see spec "Admin session does not unlock API
+  // scope" / "API credentials do not unlock admin scope").
+  fastify.register(adminPlugin, { db: options.db, authConfig: options.authConfig, controller });
   return fastify;
 }
 

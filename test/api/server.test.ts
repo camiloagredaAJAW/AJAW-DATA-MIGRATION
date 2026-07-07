@@ -111,3 +111,52 @@ describe("buildServer /api scope encapsulation", () => {
     expect(response.statusCode).toBe(200);
   });
 });
+
+describe("buildServer /admin scope wiring", () => {
+  it("exposes POST /admin/login and sets a session cookie on success", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/login",
+      payload: { username: authConfig.username, password: authConfig.password },
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(response.headers["set-cookie"]).toBeDefined();
+  });
+
+  it("does not let a valid /admin session cookie authenticate against /api/*", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig });
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/admin/login",
+      payload: { username: authConfig.username, password: authConfig.password },
+    });
+    const cookie = login.headers["set-cookie"];
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/field-mappings",
+      headers: { cookie: Array.isArray(cookie) ? cookie.join("; ") : String(cookie) },
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("does not let valid /api/* Basic Auth + API key credentials authenticate against /admin/api/*", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/admin/api/session",
+      headers: validHeaders(),
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+});
