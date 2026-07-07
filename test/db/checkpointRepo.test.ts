@@ -6,6 +6,8 @@ import { createRun } from "../../src/db/runsRepo.js";
 import {
   advanceOffset,
   getByRunCountry,
+  getMostRecentCheckpointForCountry,
+  listByRun,
   setAiSearchId,
   setStatus,
   upsertCheckpoint,
@@ -62,6 +64,57 @@ describe("upsertCheckpoint", () => {
       /UNIQUE constraint failed/,
     );
   });
+
+  it("seeds last_offset and ai_search_id from the most recent checkpoint for the country when a DIFFERENT run creates a checkpoint for the first time", () => {
+    const db = freshDb();
+    const runA = createRun(db);
+    const checkpointA = upsertCheckpoint(db, runA.id, "ar");
+    advanceOffset(db, checkpointA.id, 500);
+    setAiSearchId(db, checkpointA.id, 777);
+
+    const runB = createRun(db);
+    const checkpointB = upsertCheckpoint(db, runB.id, "ar");
+
+    expect(checkpointB.runId).toBe(runB.id);
+    expect(checkpointB.lastOffset).toBe(500);
+    expect(checkpointB.aiSearchId).toBe(777);
+  });
+
+  it("still defaults to offset 0 / null ai_search_id when NO checkpoint exists yet for the country in any run", () => {
+    const db = freshDb();
+    const run = createRun(db);
+
+    const checkpoint = upsertCheckpoint(db, run.id, "cl");
+
+    expect(checkpoint.lastOffset).toBe(0);
+    expect(checkpoint.aiSearchId).toBeNull();
+  });
+});
+
+describe("getMostRecentCheckpointForCountry", () => {
+  it("returns null when no checkpoint exists yet for the country in any run", () => {
+    const db = freshDb();
+
+    const found = getMostRecentCheckpointForCountry(db, "ar");
+
+    expect(found).toBeNull();
+  });
+
+  it("returns the most recently updated checkpoint for the country across ALL runs", () => {
+    const db = freshDb();
+    const runA = createRun(db);
+    const checkpointA = upsertCheckpoint(db, runA.id, "ar");
+    advanceOffset(db, checkpointA.id, 500);
+
+    const runB = createRun(db);
+    const checkpointB = upsertCheckpoint(db, runB.id, "ar");
+    advanceOffset(db, checkpointB.id, 750);
+
+    const found = getMostRecentCheckpointForCountry(db, "ar");
+
+    expect(found?.runId).toBe(runB.id);
+    expect(found?.lastOffset).toBe(750);
+  });
 });
 
 describe("getByRunCountry", () => {
@@ -114,6 +167,42 @@ describe("setAiSearchId", () => {
     const updated = setAiSearchId(db, checkpoint.id, 456);
 
     expect(updated?.aiSearchId).toBe(456);
+  });
+});
+
+describe("listByRun", () => {
+  it("returns every checkpoint for a run, ordered by country_code", () => {
+    const db = freshDb();
+    const run = createRun(db);
+    upsertCheckpoint(db, run.id, "cl");
+    upsertCheckpoint(db, run.id, "ar");
+
+    const found = listByRun(db, run.id);
+
+    expect(found).toHaveLength(2);
+    expect(found.map((row) => row.countryCode)).toEqual(["ar", "cl"]);
+  });
+
+  it("returns an empty array when the run has no checkpoints yet", () => {
+    const db = freshDb();
+    const run = createRun(db);
+
+    const found = listByRun(db, run.id);
+
+    expect(found).toEqual([]);
+  });
+
+  it("does not return checkpoints belonging to a different run", () => {
+    const db = freshDb();
+    const runA = createRun(db);
+    const runB = createRun(db);
+    upsertCheckpoint(db, runA.id, "ar");
+    upsertCheckpoint(db, runB.id, "cl");
+
+    const found = listByRun(db, runA.id);
+
+    expect(found).toHaveLength(1);
+    expect(found[0]?.countryCode).toBe("ar");
   });
 });
 
