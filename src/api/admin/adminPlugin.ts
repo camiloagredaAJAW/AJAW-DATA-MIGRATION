@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { AuthConfig } from "../auth/authGuard.js";
 import type { MigrationController } from "../../migration/controller.js";
 import { requireAdminSession, requireCsrfHeader } from "./sessionAuth.js";
+import { registerAdminBffRoutes } from "./adminBffRoutes.js";
 
 declare module "fastify" {
   interface Session {
@@ -140,8 +141,9 @@ export const adminPlugin: FastifyPluginAsync<AdminPluginOptions> = async (fastif
     admin.addHook("onRequest", requireAdminSession);
     admin.addHook("preHandler", requireCsrfHeader);
 
-    // Guard-wiring proof for this PR; Phase 3 adds the real BFF routes
-    // (status/field-mappings/errors/migration control) into this same scope.
+    // Guard-wiring proof route from PR2, kept as a lightweight liveness check.
     admin.get("/admin/api/session", async () => ({ data: { authenticated: true } }));
+
+    registerAdminBffRoutes(admin, options.db, options.controller);
   });
 };
