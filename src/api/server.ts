@@ -11,6 +11,7 @@ import {
   type MigrationControlDeps,
 } from "./routes/migrationControl.js";
 import { createMigrationController } from "../migration/controller.js";
+import { adminPlugin } from "./admin/adminPlugin.js";
 import type { MigrationEngineDeps, MigrationSummary } from "../migration/engine.js";
 import { buildMigrationDeps } from "../cli/migrate.js";
 import { updateRunStatus } from "../db/runsRepo.js";
@@ -65,6 +66,10 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       registerMigrationControlRoutes(api, controller);
     }
   });
+  // Sibling scope: its own session-cookie auth, entirely separate from the
+  // /api Basic Auth guard above (see spec "Admin session does not unlock API
+  // scope" / "API credentials do not unlock admin scope").
+  fastify.register(adminPlugin, { db: options.db, authConfig: options.authConfig, controller });
   return fastify;
 }
 
