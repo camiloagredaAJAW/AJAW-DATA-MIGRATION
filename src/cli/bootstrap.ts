@@ -44,8 +44,9 @@ export interface RefreshCatalogResult {
 }
 
 /**
- * Refreshes `source_catalog` from the live Leads DB `/dbs` endpoint.
- * CLI-only per design — there is no HTTP refresh endpoint in this slice.
+ * Refreshes `source_catalog` from the live Leads DB `/dbs` endpoint. Also
+ * exposed over HTTP via `MigrationController.refreshCatalog` (see
+ * `POST /admin/api/catalog/refresh` in `adminBffRoutes.ts`), not just the CLI.
  */
 export async function runRefreshCatalog(
   db: Database.Database,

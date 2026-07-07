@@ -625,6 +625,67 @@ describe("POST /admin/api/migration/{start,pause,resume,stop}", () => {
   });
 });
 
+describe("POST /admin/api/catalog/refresh", () => {
+  function fakeRefreshLeadsConfig(): LeadsClientConfig {
+    const fetchImpl = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ countries: { AR: {}, CO: {} }, databases: {} }),
+      text: async () => JSON.stringify({ countries: { AR: {}, CO: {} }, databases: {} }),
+    });
+    return {
+      ...fakeLeadsConfig(),
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    };
+  }
+
+  it("refreshes the catalog and returns the result with 200", async () => {
+    const db = freshDb();
+    const deps: MigrationControlDeps = { ...fakeMigrationDeps(db), leadsConfig: fakeRefreshLeadsConfig() };
+    const server = buildServer({ db, authConfig, migrationDeps: deps });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/api/catalog/refresh",
+      headers: adminMutateHeaders(cookie),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json().data;
+    expect(body.totalCatalogEntries).toBe(2);
+    expect(body.newPairs).toEqual([
+      { sourceDb: "AR", sourceTable: "companies" },
+      { sourceDb: "CO", sourceTable: "companies" },
+    ]);
+  });
+
+  it("rejects a refresh without an authenticated session", async () => {
+    const db = freshDb();
+    const deps: MigrationControlDeps = { ...fakeMigrationDeps(db), leadsConfig: fakeRefreshLeadsConfig() };
+    const server = buildServer({ db, authConfig, migrationDeps: deps });
+
+    const response = await server.inject({ method: "POST", url: "/admin/api/catalog/refresh" });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("rejects a refresh missing the CSRF header even with a valid session", async () => {
+    const db = freshDb();
+    const deps: MigrationControlDeps = { ...fakeMigrationDeps(db), leadsConfig: fakeRefreshLeadsConfig() };
+    const server = buildServer({ db, authConfig, migrationDeps: deps });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/api/catalog/refresh",
+      headers: { cookie },
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+});
+
 describe("cross-surface control consistency", () => {
   it("a run started via /api/migration/start can be paused via /admin/api/migration/pause, and both status endpoints agree", async () => {
     const db = freshDb();

@@ -214,6 +214,11 @@ export function registerAdminBffRoutes(
     return reply.code(202).send({ data: result.run });
   });
 
+  fastify.post("/admin/api/catalog/refresh", async (_request, reply) => {
+    const result = await controller.refreshCatalog();
+    return reply.send({ data: result });
+  });
+
   fastify.post("/admin/api/migration/stop", async (request, reply) => {
     const result = controller.stop();
     if (result.outcome === "conflict") {

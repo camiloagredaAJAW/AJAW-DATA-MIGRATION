@@ -11,16 +11,18 @@ import { describe, expect, it } from "vitest";
 // touch the DOM.
 const require = createRequire(import.meta.url);
 const appJsPath = path.join(process.cwd(), "public", "app.js");
-const { escapeHtml, describeRetryOutcome, computeControlGating } = require(appJsPath) as {
-  escapeHtml: (value: unknown) => string;
-  describeRetryOutcome: (status: number, body: unknown) => string;
-  computeControlGating: (runStatus: string | null) => {
-    startDisabled: boolean;
-    pauseDisabled: boolean;
-    resumeDisabled: boolean;
-    stopDisabled: boolean;
+const { escapeHtml, describeRetryOutcome, computeControlGating, formatRefreshCatalogResult } =
+  require(appJsPath) as {
+    escapeHtml: (value: unknown) => string;
+    describeRetryOutcome: (status: number, body: unknown) => string;
+    computeControlGating: (runStatus: string | null) => {
+      startDisabled: boolean;
+      pauseDisabled: boolean;
+      resumeDisabled: boolean;
+      stopDisabled: boolean;
+    };
+    formatRefreshCatalogResult: (result: { totalCatalogEntries: number; newPairs: unknown[] }) => string;
   };
-};
 
 describe("escapeHtml", () => {
   it("escapes &, <, > for safe use in an HTML text node", () => {
@@ -80,6 +82,23 @@ describe("describeRetryOutcome", () => {
   it("falls back to a generic 'unexpected status' label for any other status", () => {
     expect(describeRetryOutcome(500, {})).toBe("unexpected status 500");
     expect(describeRetryOutcome(418, {})).toBe("unexpected status 418");
+  });
+});
+
+describe("formatRefreshCatalogResult", () => {
+  it("summarizes total entries and newly discovered pairs", () => {
+    expect(
+      formatRefreshCatalogResult({
+        totalCatalogEntries: 17,
+        newPairs: [{ sourceDb: "BR", sourceTable: "companies" }, { sourceDb: "PE", sourceTable: "companies" }, {}],
+      }),
+    ).toBe("Catalog refreshed: 17 countries total, 3 newly discovered.");
+  });
+
+  it("handles zero newly discovered pairs", () => {
+    expect(formatRefreshCatalogResult({ totalCatalogEntries: 5, newPairs: [] })).toBe(
+      "Catalog refreshed: 5 countries total, 0 newly discovered.",
+    );
   });
 });
 

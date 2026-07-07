@@ -258,6 +258,33 @@ describe("createMigrationController", () => {
     });
   });
 
+  describe("refreshCatalog", () => {
+    it("delegates to runRefreshCatalog and returns its result", async () => {
+      const db = freshDb();
+      const fetchImpl = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ countries: { AR: {}, CO: {} }, databases: {} }),
+        text: async () => JSON.stringify({ countries: { AR: {}, CO: {} }, databases: {} }),
+      });
+      const deps: MigrationControllerDeps = {
+        ...fakeDeps(db),
+        leadsConfig: { ...fakeLeadsConfig(), fetchImpl: fetchImpl as unknown as typeof fetch },
+      };
+      const controller = createMigrationController(db, deps);
+
+      const result = await controller.refreshCatalog();
+
+      expect(result.totalCatalogEntries).toBe(2);
+      expect(result.newPairs).toEqual([
+        { sourceDb: "AR", sourceTable: "companies" },
+        { sourceDb: "CO", sourceTable: "companies" },
+      ]);
+      const rows = db.prepare(`SELECT source_db FROM source_catalog ORDER BY source_db`).all();
+      expect(rows).toEqual([{ source_db: "AR" }, { source_db: "CO" }]);
+    });
+  });
+
   describe("retry", () => {
     it("returns not_found for a nonexistent error id", async () => {
       const db = freshDb();

@@ -31,6 +31,17 @@
       <button id="stop-button" class="danger" disabled>Stop</button>
     </div>
 
+    <h2>Source Catalog</h2>
+    <p class="muted">
+      Populates the country list the migration engine reads from
+      <code>source_catalog</code>. Run this on a fresh database before
+      starting a migration, or whenever a new country goes live upstream.
+    </p>
+    <div class="controls-row">
+      <button id="refresh-catalog-button">Refresh Catalog</button>
+      <span id="refresh-catalog-result" class="muted"></span>
+    </div>
+
     <h2>Per-Country Progress</h2>
     <table id="checkpoints-table">
       <thead>

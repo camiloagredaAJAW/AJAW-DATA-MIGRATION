@@ -10,6 +10,7 @@ import { listByRun, type MigrationCheckpointStatus } from "../db/checkpointRepo.
 import { listImportErrors, type ImportErrorFilter, type ImportErrorRow } from "../db/importErrorRepo.js";
 import { retrySingleRecord, type RetryOutcome } from "./retry.js";
 import { runMigration, type MigrationEngineDeps, type MigrationSummary } from "./engine.js";
+import { runRefreshCatalog, type RefreshCatalogResult } from "../cli/bootstrap.js";
 
 /** Every engine dependency except the ones the controller derives per-call (`countries`, `runId`). */
 export type MigrationControllerDeps = Omit<MigrationEngineDeps, "countries" | "runId">;
@@ -59,6 +60,8 @@ export interface MigrationController {
    * factory below) — both HTTP surfaces call this same shared instance.
    */
   retry(errorId: number): Promise<RetryOutcome>;
+  /** Thin passthrough to `runRefreshCatalog` — see its doc comment for what it does. */
+  refreshCatalog(): Promise<RefreshCatalogResult>;
 }
 
 /**
@@ -193,6 +196,10 @@ export function createMigrationController(
       } finally {
         inFlightRetries.delete(errorId);
       }
+    },
+
+    async refreshCatalog(): Promise<RefreshCatalogResult> {
+      return runRefreshCatalog(db, deps.leadsConfig);
     },
   };
 }

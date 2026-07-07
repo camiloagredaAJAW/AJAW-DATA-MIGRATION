@@ -201,6 +201,41 @@ async function runControlAction(action) {
   }
 }
 
+/**
+ * Pure formatting function so the summary text is unit-testable without a
+ * DOM — mirrors the `describeRetryOutcome` pattern above.
+ */
+function formatRefreshCatalogResult(result) {
+  return `Catalog refreshed: ${result.totalCatalogEntries} countries total, ${result.newPairs.length} newly discovered.`;
+}
+
+async function refreshCatalog() {
+  const button = document.getElementById("refresh-catalog-button");
+  const resultEl = document.getElementById("refresh-catalog-result");
+  const errorEl = document.getElementById("dashboard-error");
+  hideError(errorEl);
+  resultEl.textContent = "Refreshing...";
+  button.disabled = true;
+
+  try {
+    const { ok, body } = await adminFetchJson("/admin/api/catalog/refresh", { method: "POST" });
+    if (!ok) {
+      resultEl.textContent = "";
+      showError(errorEl, body?.error?.message ?? "Could not refresh the catalog.");
+      return;
+    }
+    resultEl.textContent = formatRefreshCatalogResult(body.data);
+  } catch (error) {
+    if (error.message !== "unauthenticated") {
+      console.error(error);
+      resultEl.textContent = "";
+      showError(errorEl, "Could not reach the server.");
+    }
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function initDashboardPage() {
   const runSummary = document.getElementById("run-summary");
   runSummary.insertAdjacentHTML(
@@ -217,6 +252,7 @@ function initDashboardPage() {
   document.getElementById("pause-button").addEventListener("click", () => runControlAction("pause"));
   document.getElementById("resume-button").addEventListener("click", () => runControlAction("resume"));
   document.getElementById("stop-button").addEventListener("click", () => runControlAction("stop"));
+  document.getElementById("refresh-catalog-button").addEventListener("click", refreshCatalog);
 
   loadDashboard();
 }
@@ -451,5 +487,5 @@ if (typeof document !== "undefined") {
 // under this repo's root `"type": "module"` package.json — the browser never
 // reads either package.json, so it's unaffected either way.
 if (typeof module !== "undefined") {
-  module.exports = { escapeHtml, describeRetryOutcome, computeControlGating };
+  module.exports = { escapeHtml, describeRetryOutcome, computeControlGating, formatRefreshCatalogResult };
 }
