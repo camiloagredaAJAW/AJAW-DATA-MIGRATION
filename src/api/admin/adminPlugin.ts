@@ -1,12 +1,28 @@
 import { createHash } from "node:crypto";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import fastifyCookie from "@fastify/cookie";
 import fastifySession from "@fastify/session";
+import fastifyStatic from "@fastify/static";
 import type { FastifyPluginAsync } from "fastify";
 import type Database from "better-sqlite3";
 import { z } from "zod";
 import type { AuthConfig } from "../auth/authGuard.js";
 import type { MigrationController } from "../../migration/controller.js";
 import { requireAdminSession, requireCsrfHeader } from "./sessionAuth.js";
+import { registerAdminBffRoutes } from "./adminBffRoutes.js";
+
+/**
+ * `<repo>/public`, matching `server.ts`'s `REPO_ROOT` computation: this file
+ * lives at `src/api/admin/`, three levels below the repo root.
+ */
+const PUBLIC_DIR = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  "..",
+  "public",
+);
 
 declare module "fastify" {
   interface Session {
@@ -82,6 +98,25 @@ function deriveSessionSecret(authConfig: AuthConfig): string {
  * set here.
  */
 export const adminPlugin: FastifyPluginAsync<AdminPluginOptions> = async (fastify, options) => {
+  // Static admin UI (design Decision 4): `@fastify/static` registers a
+  // wildcard GET route under this prefix. It never shadows the explicit
+  // routes below (`/admin/login`, `/admin/api/*`) — find-my-way always
+  // prefers a literal route match over a wildcard one, and this plugin
+  // never serves anything under `/admin/api/*` from disk.
+  //
+  // Intentionally registered ungated (before the `requireAdminSession` scope
+  // below): `login.html`, `dashboard.html`, etc. must be reachable by an
+  // unauthenticated browser, since the client-side redirect-to-login flow
+  // (`window.location.replace("/admin/login.html")` on a 401 from any
+  // `/admin/api/*` call, see `public/app.js`) itself needs to fetch
+  // `login.html`. Gating this route would break that redirect. The actual
+  // data lives behind `/admin/api/*`, which IS gated below — the static HTML
+  // shells contain no sensitive data on their own.
+  await fastify.register(fastifyStatic, {
+    root: PUBLIC_DIR,
+    prefix: "/admin/",
+  });
+
   await fastify.register(fastifyCookie);
   await fastify.register(fastifySession, {
     secret: deriveSessionSecret(options.authConfig),
@@ -140,8 +175,9 @@ export const adminPlugin: FastifyPluginAsync<AdminPluginOptions> = async (fastif
     admin.addHook("onRequest", requireAdminSession);
     admin.addHook("preHandler", requireCsrfHeader);
 
-    // Guard-wiring proof for this PR; Phase 3 adds the real BFF routes
-    // (status/field-mappings/errors/migration control) into this same scope.
+    // Guard-wiring proof route from PR2, kept as a lightweight liveness check.
     admin.get("/admin/api/session", async () => ({ data: { authenticated: true } }));
+
+    registerAdminBffRoutes(admin, options.db, options.controller);
   });
 };

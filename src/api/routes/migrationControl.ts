@@ -109,6 +109,8 @@ export function registerMigrationControlRoutes(
         return reply.code(404).send(notFoundError("import_errors row not found"));
       case "already_resolved":
         return reply.code(409).send(conflictError("import_errors row is already resolved"));
+      case "retry_in_progress":
+        return reply.code(409).send(conflictError("import_errors row retry is already in progress"));
       case "resolved":
         return reply.send({ data: { outcome: "resolved", importError: outcome.importError } });
       case "failed":

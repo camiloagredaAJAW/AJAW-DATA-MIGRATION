@@ -1,0 +1,195 @@
+:root {
+  color-scheme: light;
+  --border: #d0d7de;
+  --bg-muted: #f6f8fa;
+  --text-muted: #57606a;
+  --danger: #cf222e;
+  --danger-bg: #fff1f0;
+  --ok: #1a7f37;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: #1f2328;
+  background: #fff;
+}
+
+header.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-muted);
+}
+
+header.app-header nav a {
+  margin-right: 16px;
+  color: #1f2328;
+  text-decoration: none;
+}
+
+header.app-header nav a:hover {
+  text-decoration: underline;
+}
+
+main {
+  padding: 24px;
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.login-shell {
+  max-width: 360px;
+  margin: 80px auto;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+form.stack label {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+
+form.stack input,
+form.stack select {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+button {
+  cursor: pointer;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-muted);
+  font-size: 14px;
+}
+
+button:hover:not(:disabled) {
+  background: #eaeef2;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+button.primary {
+  background: #1f883d;
+  border-color: #1a7f37;
+  color: #fff;
+}
+
+button.primary:hover:not(:disabled) {
+  background: #1a7f37;
+}
+
+button.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 16px;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+
+th {
+  background: var(--bg-muted);
+}
+
+.controls-row {
+  display: flex;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.filters-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.filters-row input,
+.filters-row select {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.error-banner {
+  padding: 8px 12px;
+  border-radius: 4px;
+  background: var(--danger-bg);
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+
+.error-banner[hidden] {
+  display: none;
+}
+
+.status-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--bg-muted);
+  border: 1px solid var(--border);
+}
+
+.status-pill.running {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.status-pill.paused {
+  color: #9a6700;
+  border-color: #9a6700;
+}
+
+.status-pill.stopped,
+.status-pill.failed {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.muted {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.cell-input {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+}

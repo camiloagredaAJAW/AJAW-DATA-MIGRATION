@@ -53,6 +53,11 @@ export interface MigrationController {
   stop(): ControlActionOutcome;
   status(): MigrationStatusPayload;
   listErrors(filter: ImportErrorFilter): ImportErrorRow[];
+  /**
+   * Rejects with `{ outcome: "retry_in_progress" }` when a retry for the
+   * same `errorId` is already in flight (see `inFlightRetries` in the
+   * factory below) — both HTTP surfaces call this same shared instance.
+   */
   retry(errorId: number): Promise<RetryOutcome>;
 }
 
@@ -77,6 +82,18 @@ export function createMigrationController(
 ): MigrationController {
   const runMigrationFn = options.runMigrationFn ?? runMigration;
   const registry = new Map<number, Promise<MigrationSummary>>();
+  /**
+   * Error ids with a `retry()` currently in flight. `retrySingleRecord` does
+   * a check-then-act sequence (check `resolved`, fetch the record, lazily
+   * create an `AiSearch` parent, create the `AiSearchResults` child, THEN
+   * mark resolved) across multiple `await` points with no lock of its own.
+   * Both the `/api` and `/admin` HTTP surfaces call into this SAME controller
+   * instance, so guarding here — rather than inside `retrySingleRecord` — is
+   * enough to stop two near-simultaneous retries for the same `errorId` from
+   * both passing the `resolved === false` check and duplicating the Axelor
+   * writes. Mirrors `registry`'s add-on-start/delete-in-`finally` shape above.
+   */
+  const inFlightRetries = new Set<number>();
 
   function launch(runId: number): void {
     const promise = runMigrationFn({ ...deps, runId });
@@ -167,7 +184,15 @@ export function createMigrationController(
     },
 
     async retry(errorId: number): Promise<RetryOutcome> {
-      return retrySingleRecord(deps, errorId);
+      if (inFlightRetries.has(errorId)) {
+        return { outcome: "retry_in_progress" };
+      }
+      inFlightRetries.add(errorId);
+      try {
+        return await retrySingleRecord(deps, errorId);
+      } finally {
+        inFlightRetries.delete(errorId);
+      }
     },
   };
 }
