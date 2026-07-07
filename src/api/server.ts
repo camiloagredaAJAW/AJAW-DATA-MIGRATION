@@ -10,6 +10,7 @@ import {
   registerMigrationControlRoutes,
   type MigrationControlDeps,
 } from "./routes/migrationControl.js";
+import { createMigrationController } from "../migration/controller.js";
 import type { MigrationEngineDeps, MigrationSummary } from "../migration/engine.js";
 import { buildMigrationDeps } from "../cli/migrate.js";
 import { updateRunStatus } from "../db/runsRepo.js";
@@ -33,20 +34,37 @@ export interface BuildServerOptions {
 }
 
 /**
- * Builds the Fastify instance with the auth guard registered before the
- * field_mappings and (optional) migration-control routes, so every route
- * requires Basic Auth + the internal API key. Not started here — callers
- * decide whether to `.listen()` (real server) or use `.inject()` (tests).
+ * Builds the Fastify instance with the `/api/*` routes (field_mappings and
+ * the optional migration-control routes) encapsulated in their own plugin
+ * context. The auth guard's `onRequest` hook is registered INSIDE that same
+ * `register()` callback, WITHOUT a `{prefix}` option: `registerFieldMappingsRoutes`
+ * and `registerMigrationControlRoutes` already hardcode `/api/...` in every
+ * route path, so a prefix would double it to `/api/api/...`. Fastify's plugin
+ * encapsulation alone confines the hook to this context — it never leaks to
+ * sibling scopes (e.g. the `/admin/*` session-cookie scope registered
+ * alongside it), while route paths stay unchanged. Not started here —
+ * callers decide whether to `.listen()` (real server) or use `.inject()`
+ * (tests).
  */
 export function buildServer(options: BuildServerOptions): FastifyInstance {
   const fastify = Fastify({ logger: false });
-  registerAuthGuard(fastify, options.authConfig);
-  registerFieldMappingsRoutes(fastify, options.db);
-  if (options.migrationDeps !== undefined) {
-    registerMigrationControlRoutes(fastify, options.db, options.migrationDeps, {
-      runMigrationFn: options.runMigrationFn,
-    });
-  }
+  // Built once here (not inside registerMigrationControlRoutes) so a future
+  // `/admin/*` scope can share this exact instance instead of running a
+  // second, independent registry against the same DB.
+  const controller =
+    options.migrationDeps !== undefined
+      ? createMigrationController(options.db, options.migrationDeps, {
+          runMigrationFn: options.runMigrationFn,
+        })
+      : undefined;
+
+  fastify.register(async (api) => {
+    registerAuthGuard(api, options.authConfig);
+    registerFieldMappingsRoutes(api, options.db);
+    if (controller !== undefined) {
+      registerMigrationControlRoutes(api, controller);
+    }
+  });
   return fastify;
 }
 
