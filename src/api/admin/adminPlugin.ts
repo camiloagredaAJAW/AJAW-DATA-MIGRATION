@@ -103,6 +103,15 @@ export const adminPlugin: FastifyPluginAsync<AdminPluginOptions> = async (fastif
   // routes below (`/admin/login`, `/admin/api/*`) — find-my-way always
   // prefers a literal route match over a wildcard one, and this plugin
   // never serves anything under `/admin/api/*` from disk.
+  //
+  // Intentionally registered ungated (before the `requireAdminSession` scope
+  // below): `login.html`, `dashboard.html`, etc. must be reachable by an
+  // unauthenticated browser, since the client-side redirect-to-login flow
+  // (`window.location.replace("/admin/login.html")` on a 401 from any
+  // `/admin/api/*` call, see `public/app.js`) itself needs to fetch
+  // `login.html`. Gating this route would break that redirect. The actual
+  // data lives behind `/admin/api/*`, which IS gated below — the static HTML
+  // shells contain no sensitive data on their own.
   await fastify.register(fastifyStatic, {
     root: PUBLIC_DIR,
     prefix: "/admin/",

@@ -59,10 +59,26 @@ function hideError(element) {
   element.hidden = true;
 }
 
+/**
+ * Escapes for BOTH HTML text-node and (double- or single-quoted) HTML
+ * attribute-value contexts — every call site in this file interpolates the
+ * result into both (e.g. `value="${escapeHtml(...)}"` as well as plain text
+ * nodes). A previous DOM-`textContent`-based implementation only escaped
+ * `&`/`<`/`>` (the text-node serialization rules) and left `"`/`'`
+ * unescaped, which let an attacker-controlled value (e.g. a saved field
+ * mapping's `destinationField`/`transform`, which has no character
+ * restriction server-side) break out of a double-quoted attribute and inject
+ * arbitrary markup/scripts — a stored-XSS bug. Implemented as a pure string
+ * function (no `document` dependency) so it's also unit-testable under
+ * Node without a DOM/jsdom dependency — see test/public/app.test.ts.
+ */
 function escapeHtml(value) {
-  const div = document.createElement("div");
-  div.textContent = value ?? "";
-  return div.innerHTML;
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function wireLogout() {
@@ -116,12 +132,30 @@ function renderCheckpoints(checkpoints) {
   }
 }
 
-function applyControlGating(runStatus) {
+/**
+ * Pure decision function, extracted from `applyControlGating` so the
+ * start/pause/resume/stop button-disabled logic (including the fallback for
+ * an unrecognized/unexpected `runStatus`) can be unit-tested without a DOM.
+ * An unrecognized status (anything other than `"running"`/`"paused"`, e.g. a
+ * future backend status value) falls through to the same gating as `null`
+ * (no run): start enabled, pause/resume/stop disabled.
+ */
+function computeControlGating(runStatus) {
   const isActive = runStatus !== null && RUN_ACTIVE_STATUSES.has(runStatus);
-  document.getElementById("start-button").disabled = isActive;
-  document.getElementById("pause-button").disabled = runStatus !== "running";
-  document.getElementById("resume-button").disabled = runStatus !== "paused";
-  document.getElementById("stop-button").disabled = !isActive;
+  return {
+    startDisabled: isActive,
+    pauseDisabled: runStatus !== "running",
+    resumeDisabled: runStatus !== "paused",
+    stopDisabled: !isActive,
+  };
+}
+
+function applyControlGating(runStatus) {
+  const gating = computeControlGating(runStatus);
+  document.getElementById("start-button").disabled = gating.startDisabled;
+  document.getElementById("pause-button").disabled = gating.pauseDisabled;
+  document.getElementById("resume-button").disabled = gating.resumeDisabled;
+  document.getElementById("stop-button").disabled = gating.stopDisabled;
 }
 
 async function loadDashboard() {
@@ -140,6 +174,7 @@ async function loadDashboard() {
     applyControlGating(run === null ? null : run.status);
   } catch (error) {
     if (error.message !== "unauthenticated") {
+      console.error(error);
       showError(errorEl, "Could not reach the server.");
     }
   }
@@ -156,7 +191,12 @@ async function runControlAction(action) {
     await loadDashboard();
   } catch (error) {
     if (error.message !== "unauthenticated") {
+      console.error(error);
       showError(errorEl, "Could not reach the server.");
+      // Unlike the `!ok` branch above, a network-level failure here never
+      // ran `loadDashboard()`, so the button gating from the previous
+      // successful load would otherwise go stale. Re-sync it here too.
+      await loadDashboard();
     }
   }
 }
@@ -224,6 +264,7 @@ async function loadMappings() {
     renderMappingsTable(body.data);
   } catch (error) {
     if (error.message !== "unauthenticated") {
+      console.error(error);
       showError(errorEl, "Could not reach the server.");
     }
   }
@@ -251,6 +292,7 @@ async function saveMappingRow(row) {
     await loadMappings();
   } catch (error) {
     if (error.message !== "unauthenticated") {
+      console.error(error);
       showError(errorEl, "Could not reach the server.");
     }
   }
@@ -321,6 +363,7 @@ async function loadErrors() {
     renderErrorsTable(body.data);
   } catch (error) {
     if (error.message !== "unauthenticated") {
+      console.error(error);
       showError(errorEl, "Could not reach the server.");
     }
   }
@@ -353,6 +396,7 @@ async function retryError(row) {
     }
   } catch (error) {
     if (error.message !== "unauthenticated") {
+      console.error(error);
       resultEl.textContent = "could not reach the server";
     }
   }
@@ -387,8 +431,25 @@ function init() {
   else if (page === "errors") initErrorsPage();
 }
 
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", init);
-} else {
-  init();
+// Guarded on `typeof document !== "undefined"` so this file can also be
+// `require()`d from a Node test runner (see test/public/app.test.ts) to unit
+// test the pure functions below, without a DOM/jsdom dependency and without
+// auto-running the page-init side effects there.
+if (typeof document !== "undefined") {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+}
+
+// Exposes pure, DOM-independent logic for unit testing (see
+// test/public/app.test.ts). Guarded so this file still works unmodified as a
+// plain `<script src="/admin/app.js">` in the browser, where `module` is
+// undefined. `public/package.json` (`"type": "commonjs"`) is what makes
+// `module` defined here when this file is `require()`d from a test running
+// under this repo's root `"type": "module"` package.json — the browser never
+// reads either package.json, so it's unaffected either way.
+if (typeof module !== "undefined") {
+  module.exports = { escapeHtml, describeRetryOutcome, computeControlGating };
 }
