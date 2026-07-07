@@ -239,6 +239,76 @@ async function refreshCatalog() {
   }
 }
 
+/**
+ * Pure formatting function so the summary text is unit-testable without a
+ * DOM — mirrors `formatRefreshCatalogResult` above. `seed.appliedCount` (not
+ * `totalRows`) is used deliberately: on a wiped table every row is a fresh
+ * insert, so they're numerically equal in practice, but `appliedCount` is the
+ * field that actually means "rows written" per `loadDeducedSeed`'s contract.
+ */
+function formatFullResetResult(result) {
+  return `Reset complete: ${result.seed.appliedCount} field mappings seeded, ${result.catalog.totalCatalogEntries} catalog entries found.`;
+}
+
+/**
+ * Enables the "Reset Everything" button only once the password field is
+ * non-empty — the whole point of requiring the operator to type it is
+ * defeated if the button is clickable before they have.
+ */
+function updateResetButtonState() {
+  const passwordInput = document.getElementById("reset-password-input");
+  const button = document.getElementById("reset-everything-button");
+  button.disabled = passwordInput.value === "";
+}
+
+async function resetEverything() {
+  const passwordInput = document.getElementById("reset-password-input");
+  const button = document.getElementById("reset-everything-button");
+  const resultEl = document.getElementById("reset-everything-result");
+  const errorEl = document.getElementById("dashboard-error");
+  hideError(errorEl);
+  resultEl.classList.remove("success");
+  resultEl.textContent = "Resetting...";
+  button.disabled = true;
+
+  try {
+    const { status, ok, body } = await adminFetchJson("/admin/api/reset", {
+      method: "POST",
+      body: JSON.stringify({ password: passwordInput.value }),
+    });
+    if (!ok) {
+      resultEl.textContent = "";
+      // The wrong-password case (403, not 401 — see adminPlugin.ts's
+      // POST /admin/api/reset for why) gets a dedicated message and
+      // deliberately leaves the password field untouched so the operator can
+      // see/correct what they typed, unlike the success path below which
+      // clears it. The entered password is never logged here or read back
+      // from `body` — the server never echoes it. A 401 here is never
+      // reachable: adminFetch already intercepts it and redirects to the
+      // login page before this branch runs.
+      showError(
+        errorEl,
+        status === 403
+          ? "Incorrect password."
+          : (body?.error?.message ?? "Could not reset."),
+      );
+      return;
+    }
+    resultEl.textContent = formatFullResetResult(body.data);
+    resultEl.classList.add("success");
+    passwordInput.value = "";
+    await loadDashboard();
+  } catch (error) {
+    if (error.message !== "unauthenticated") {
+      console.error(error);
+      resultEl.textContent = "";
+      showError(errorEl, "Could not reach the server.");
+    }
+  } finally {
+    updateResetButtonState();
+  }
+}
+
 function initDashboardPage() {
   const runSummary = document.getElementById("run-summary");
   runSummary.insertAdjacentHTML(
@@ -256,6 +326,9 @@ function initDashboardPage() {
   document.getElementById("resume-button").addEventListener("click", () => runControlAction("resume"));
   document.getElementById("stop-button").addEventListener("click", () => runControlAction("stop"));
   document.getElementById("refresh-catalog-button").addEventListener("click", refreshCatalog);
+
+  document.getElementById("reset-password-input").addEventListener("input", updateResetButtonState);
+  document.getElementById("reset-everything-button").addEventListener("click", resetEverything);
 
   loadDashboard();
 }
@@ -619,7 +692,15 @@ if (typeof module !== "undefined") {
     describeRetryOutcome,
     computeControlGating,
     formatRefreshCatalogResult,
+    formatFullResetResult,
     computeErrorsPaginationState,
     computeCorrectedErrorsOffset,
+    // `adminFetch` touches only `fetch`/`window.location`, never `document`,
+    // so it's testable here without a DOM/jsdom dependency (see
+    // test/public/app.test.ts) — used specifically to prove that a 403
+    // response (e.g. wrong reset-confirmation password) does NOT trigger the
+    // redirect-to-login/throw path that a 401 does, which is exactly the bug
+    // fix #3 in the "Reset Everything" 4R review fixed.
+    adminFetch,
   };
 }

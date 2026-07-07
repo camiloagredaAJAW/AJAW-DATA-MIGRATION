@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import fastifyCookie from "@fastify/cookie";
@@ -10,7 +10,7 @@ import { z } from "zod";
 import type { AuthConfig } from "../auth/authGuard.js";
 import type { MigrationController } from "../../migration/controller.js";
 import { requireAdminSession, requireCsrfHeader } from "./sessionAuth.js";
-import { registerAdminBffRoutes } from "./adminBffRoutes.js";
+import { registerAdminBffRoutes, conflictError, internalError } from "./adminBffRoutes.js";
 
 /**
  * `<repo>/public`, matching `server.ts`'s `REPO_ROOT` computation: this file
@@ -40,6 +40,20 @@ export interface AdminPluginOptions {
 const loginBodySchema = z
   .object({
     username: z.string(),
+    password: z.string(),
+  })
+  .strict();
+
+/**
+ * Password-only, deliberately NOT `{ username, password }` like login: the
+ * session cookie already proves identity (that's what `requireAdminSession`
+ * is for) — this re-check exists only to re-prove possession of the
+ * credential itself before firing the single most destructive action in the
+ * app, mirroring a browser's native "re-enter your password to confirm"
+ * pattern rather than a second full login.
+ */
+const resetBodySchema = z
+  .object({
     password: z.string(),
   })
   .strict();
@@ -83,6 +97,25 @@ export function isSecureCookieEnvironment(nodeEnv: string | undefined): boolean 
  */
 function deriveSessionSecret(authConfig: AuthConfig): string {
   return createHash("sha256").update(authConfig.internalApiKey).digest("hex");
+}
+
+/**
+ * Constant-time password comparison for `POST /admin/api/reset` only —
+ * `/admin/login`'s `!==` comparison is pre-existing, accepted tech debt and
+ * intentionally left as-is; this route is scoped separately because it's the
+ * single most destructive, highest-blast-radius action in the app.
+ * `timingSafeEqual` throws on mismatched buffer lengths rather than
+ * returning `false`, so lengths are compared first — a length mismatch is
+ * not itself treated as a timing oracle worth defending against here, it
+ * just must not crash the request.
+ */
+function safeCompare(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) {
+    return false;
+  }
+  return timingSafeEqual(bufA, bufB);
 }
 
 /**
@@ -179,5 +212,71 @@ export const adminPlugin: FastifyPluginAsync<AdminPluginOptions> = async (fastif
     admin.get("/admin/api/session", async () => ({ data: { authenticated: true } }));
 
     registerAdminBffRoutes(admin, options.db, options.controller);
+
+    // POST /admin/api/reset: wipes all operational state and re-seeds/
+    // refreshes in one step (see `runFullReset` in `bootstrap.ts` for exactly
+    // what it does and why it's irreversible). Implemented here rather than
+    // in adminBffRoutes.ts because the password re-check needs
+    // `options.authConfig`, which that module doesn't have in scope — same
+    // reason `/admin/login` lives here instead of there. Reuses the same
+    // controller-optionality guard as the routes `registerAdminBffRoutes`
+    // just registered: with no controller wired (no `migrationDeps`
+    // supplied to `buildServer()`), this route isn't registered either.
+    if (options.controller !== undefined) {
+      const controller = options.controller;
+      admin.post("/admin/api/reset", async (request, reply) => {
+        const parsed = resetBodySchema.safeParse(request.body);
+        if (!parsed.success) {
+          request.log.warn(
+            { route: "POST /admin/api/reset", reason: "malformed_body" },
+            "admin reset rejected",
+          );
+          // 403, not 401: `requireAdminSession` already passed for this
+          // request — this is a re-proof-of-credential failing, not "you are
+          // not logged in". Using 401 here would be caught by `adminFetch`'s
+          // blanket 401-to-login-redirect interceptor in app.js, silently
+          // bouncing the operator to the login page instead of showing them
+          // "Incorrect password." (or, in this branch, a malformed request).
+          return reply.code(403).send({
+            error: { code: "forbidden", message: "Invalid credentials" },
+          });
+        }
+
+        if (!safeCompare(parsed.data.password, options.authConfig.password)) {
+          request.log.warn(
+            { route: "POST /admin/api/reset", reason: "invalid_password" },
+            "admin reset rejected",
+          );
+          return reply.code(403).send({
+            error: { code: "forbidden", message: "Invalid credentials" },
+          });
+        }
+
+        try {
+          const outcome = await controller.resetEverything();
+          if (outcome.outcome === "conflict") {
+            request.log.warn(
+              { route: "POST /admin/api/reset", reason: outcome.message },
+              "admin reset rejected",
+            );
+            return reply.code(409).send(conflictError(outcome.message));
+          }
+          return reply.send({ data: outcome.result });
+        } catch (error) {
+          // The wipe-succeeded-but-reseed-failed case: `runFullReset` already
+          // wraps the original error in a self-describing message (see its
+          // doc comment in bootstrap.ts). This is the ONLY production
+          // visibility this failure will ever get — this codebase has no
+          // error-tracking integration — so log the full message at `error`
+          // level, not just a generic warning.
+          const message = error instanceof Error ? error.message : String(error);
+          request.log.error(
+            { route: "POST /admin/api/reset", err: message },
+            "admin reset failed after wiping operational tables — manual recovery required",
+          );
+          return reply.code(500).send(internalError(message));
+        }
+      });
+    }
   });
 };

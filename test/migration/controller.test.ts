@@ -308,6 +308,102 @@ describe("createMigrationController", () => {
     });
   });
 
+  describe("resetEverything", () => {
+    it("delegates to runFullReset: wipes existing (non-active) runs and reseeds mappings/catalog", async () => {
+      const db = freshDb();
+      // Stopped, not active: an active run must be rejected (see the
+      // "conflict" test below) — this test covers the ordinary success path.
+      const run = createRun(db);
+      updateRunStatus(db, run.id, "stopped");
+      const fetchImpl = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ countries: { AR: {}, CO: {} }, databases: {} }),
+        text: async () => JSON.stringify({ countries: { AR: {}, CO: {} }, databases: {} }),
+      });
+      const deps: MigrationControllerDeps = {
+        ...fakeDeps(db),
+        leadsConfig: { ...fakeLeadsConfig(), fetchImpl: fetchImpl as unknown as typeof fetch },
+      };
+      const controller = createMigrationController(db, deps);
+
+      const outcome = await controller.resetEverything();
+
+      expect(outcome.outcome).toBe("ok");
+      if (outcome.outcome === "ok") {
+        expect(outcome.result.catalog.totalCatalogEntries).toBe(2);
+      }
+      expect(getActiveRun(db)).toBeNull();
+      expect(getRunById(db, run.id)).toBeNull();
+      const catalogRows = db.prepare(`SELECT source_db FROM source_catalog ORDER BY source_db`).all();
+      expect(catalogRows).toEqual([{ source_db: "AR" }, { source_db: "CO" }]);
+    });
+
+    it("returns a conflict without wiping anything when a migration run is active", async () => {
+      const db = freshDb();
+      const run = createRun(db); // createRun defaults to status='running', i.e. active.
+      seedTitleMapping(db, "AR");
+      const fetchImpl = vi.fn();
+      const deps: MigrationControllerDeps = {
+        ...fakeDeps(db),
+        leadsConfig: { ...fakeLeadsConfig(), fetchImpl: fetchImpl as unknown as typeof fetch },
+      };
+      const controller = createMigrationController(db, deps);
+
+      const outcome = await controller.resetEverything();
+
+      expect(outcome.outcome).toBe("conflict");
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(getRunById(db, run.id)).not.toBeNull();
+      const mappingsCount = (
+        db.prepare(`SELECT COUNT(*) as count FROM field_mappings`).get() as { count: number }
+      ).count;
+      expect(mappingsCount).toBeGreaterThan(0);
+    });
+
+    it("rejects a concurrent resetEverything call while one is already in flight, without double-wiping", async () => {
+      const db = freshDb();
+      // Deferred gate: holds the first reset's catalog fetch open so a
+      // second call can be issued while the first is still mid-flight,
+      // forcing the race deterministically instead of relying on real
+      // timing — mirrors the concurrent-retry test above.
+      let releaseFetch: () => void = () => {};
+      const fetchGate = new Promise<void>((resolve) => {
+        releaseFetch = resolve;
+      });
+      const fetchImpl = vi.fn().mockImplementation(async () => {
+        await fetchGate;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ countries: { AR: {}, CO: {} }, databases: {} }),
+          text: async () => JSON.stringify({ countries: { AR: {}, CO: {} }, databases: {} }),
+        };
+      });
+      const deps: MigrationControllerDeps = {
+        ...fakeDeps(db),
+        leadsConfig: { ...fakeLeadsConfig(), fetchImpl: fetchImpl as unknown as typeof fetch },
+      };
+      const controller = createMigrationController(db, deps);
+
+      const firstReset = controller.resetEverything();
+      await flushMicrotasks();
+
+      const secondOutcome = await controller.resetEverything();
+
+      expect(secondOutcome.outcome).toBe("conflict");
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+      releaseFetch();
+      const firstOutcome = await firstReset;
+
+      expect(firstOutcome.outcome).toBe("ok");
+      if (firstOutcome.outcome === "ok") {
+        expect(firstOutcome.result.catalog.totalCatalogEntries).toBe(2);
+      }
+    });
+  });
+
   describe("retry", () => {
     it("returns not_found for a nonexistent error id", async () => {
       const db = freshDb();

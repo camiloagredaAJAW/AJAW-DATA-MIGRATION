@@ -85,6 +85,78 @@ export async function runRefreshCatalog(
   return { totalCatalogEntries: entries.length, newPairs };
 }
 
+export interface FullResetResult {
+  readonly seed: LoadDeducedSeedResult;
+  readonly catalog: RefreshCatalogResult;
+}
+
+/**
+ * "Reset Everything": wipes ALL operational state — migration_runs,
+ * migration_checkpoints, import_errors, field_mappings, source_catalog — then
+ * re-populates field_mappings from the committed seed dataset and
+ * source_catalog from the live Leads DB, in one step. Collapses what the
+ * project owner had been doing manually (delete the SQLite file, `npm run
+ * migrate`, `npm run seed`, click "Refresh Catalog") into a single call.
+ * Exposed over HTTP as `POST /admin/api/reset` (see
+ * `MigrationController.resetEverything` and its password re-check in
+ * `adminPlugin.ts`), gated behind re-entering the admin password since this
+ * is the single most destructive action in the app.
+ *
+ * DESTRUCTIVE AND IRREVERSIBLE: there is no soft-delete, no backup, and no
+ * undo. The wipe itself runs inside one `db.transaction(...)` so a mid-wipe
+ * failure (e.g. a constraint violation) leaves every table untouched instead
+ * of partially emptied — but once that transaction commits, the deleted rows
+ * are gone for good; nothing rolls back after this function returns.
+ *
+ * Deletion order matters: `import_errors` and `migration_checkpoints` both
+ * carry `run_id INTEGER NOT NULL REFERENCES migration_runs(id)` (see
+ * migrations 006/007), and `foreign_keys = ON` is set on every connection
+ * (`db/connection.ts`), so both must be deleted before `migration_runs` or
+ * SQLite rejects the delete. `field_mappings` and `source_catalog` have no FK
+ * dependents, so their position in the list doesn't matter.
+ *
+ * The reseed happens AFTER the wipe transaction commits (not inside it):
+ * `runSeed` and `runRefreshCatalog` already own their own transactional
+ * writes and, for the catalog, an `await fetch(...)` to the live Leads DB —
+ * neither belongs inside a synchronous `db.transaction(...)` callback, and
+ * duplicating their insert/upsert logic here would risk drifting out of sync
+ * with the single source of truth each already is.
+ *
+ * Because the reseed runs AFTER the wipe transaction has already committed,
+ * a failure in `runSeed`/`runRefreshCatalog` at that point cannot be rolled
+ * back: every table is left empty with no field mappings and no catalog.
+ * That failure is caught here and rethrown as a single, self-describing
+ * `Error` (rather than letting the original error propagate un-annotated)
+ * specifically so whatever catches it next — currently `POST
+ * /admin/api/reset` in `adminPlugin.ts` — doesn't have to know this
+ * function's internals to explain the degraded state and the manual
+ * recovery steps to an operator.
+ */
+export async function runFullReset(
+  db: Database.Database,
+  leadsConfig: LeadsClientConfig,
+): Promise<FullResetResult> {
+  const wipeAll = db.transaction(() => {
+    db.prepare(`DELETE FROM import_errors`).run();
+    db.prepare(`DELETE FROM migration_checkpoints`).run();
+    db.prepare(`DELETE FROM migration_runs`).run();
+    db.prepare(`DELETE FROM field_mappings`).run();
+    db.prepare(`DELETE FROM source_catalog`).run();
+  });
+  wipeAll();
+
+  try {
+    const seed = runSeed(db, DEFAULT_SEED_JSON_PATH);
+    const catalog = await runRefreshCatalog(db, leadsConfig);
+    return { seed, catalog };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Reset wiped all tables successfully, but re-seeding failed: ${message}. All operational data is currently empty — run 'npm run seed' and 'npm run refresh' (or the Refresh Catalog button) manually to recover.`,
+    );
+  }
+}
+
 export interface SampleOptions {
   readonly sourceDb?: string;
   readonly sourceTable?: string;

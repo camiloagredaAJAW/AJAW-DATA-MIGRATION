@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // `public/app.js` is plain browser JS (no build step, loaded directly via
 // `<script src="/admin/app.js">`), not part of this project's TypeScript/ESM
@@ -16,8 +16,10 @@ const {
   describeRetryOutcome,
   computeControlGating,
   formatRefreshCatalogResult,
+  formatFullResetResult,
   computeErrorsPaginationState,
   computeCorrectedErrorsOffset,
+  adminFetch,
 } = require(appJsPath) as {
   escapeHtml: (value: unknown) => string;
   describeRetryOutcome: (status: number, body: unknown) => string;
@@ -28,6 +30,10 @@ const {
     stopDisabled: boolean;
   };
   formatRefreshCatalogResult: (result: { totalCatalogEntries: number; newPairs: unknown[] }) => string;
+  formatFullResetResult: (result: {
+    seed: { totalRows: number; appliedCount: number; skippedAdminCount: number };
+    catalog: { totalCatalogEntries: number; newPairs: unknown[] };
+  }) => string;
   computeErrorsPaginationState: (
     offset: number,
     rowCount: number,
@@ -39,6 +45,7 @@ const {
     total: number,
     pageSize: number,
   ) => number | null;
+  adminFetch: (path: string, options?: Record<string, unknown>) => Promise<Response>;
 };
 
 describe("escapeHtml", () => {
@@ -116,6 +123,26 @@ describe("formatRefreshCatalogResult", () => {
     expect(formatRefreshCatalogResult({ totalCatalogEntries: 5, newPairs: [] })).toBe(
       "Catalog refreshed: 5 countries total, 0 newly discovered.",
     );
+  });
+});
+
+describe("formatFullResetResult", () => {
+  it("summarizes seeded mapping rows and total catalog entries", () => {
+    expect(
+      formatFullResetResult({
+        seed: { totalRows: 163, appliedCount: 163, skippedAdminCount: 0 },
+        catalog: { totalCatalogEntries: 12, newPairs: [{ sourceDb: "AR", sourceTable: "companies" }] },
+      }),
+    ).toBe("Reset complete: 163 field mappings seeded, 12 catalog entries found.");
+  });
+
+  it("handles a zero-entry catalog", () => {
+    expect(
+      formatFullResetResult({
+        seed: { totalRows: 163, appliedCount: 163, skippedAdminCount: 0 },
+        catalog: { totalCatalogEntries: 0, newPairs: [] },
+      }),
+    ).toBe("Reset complete: 163 field mappings seeded, 0 catalog entries found.");
   });
 });
 
@@ -199,6 +226,58 @@ describe("computeErrorsPaginationState", () => {
       nextDisabled: true,
       indicatorText: "Showing 51-50 of 49",
     });
+  });
+});
+
+describe("adminFetch", () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = (globalThis as { window?: unknown }).window;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    (globalThis as { window?: unknown }).window = originalWindow;
+  });
+
+  /**
+   * Proves the exact bug fix #3 in the "Reset Everything" 4R review fixed:
+   * `adminFetch` intercepts ANY 401 globally and redirects to the login
+   * page before a caller (e.g. `resetEverything()`'s own
+   * `status === 403 ? "Incorrect password." : ...` branch) ever gets to
+   * inspect the response — so a wrong reset-confirmation password MUST come
+   * back as something other than 401 (403, per the fix) for its dedicated
+   * error message to ever be reachable. This is a direct exercise of
+   * `adminFetch` itself, not just a status-code assertion made in isolation
+   * from the redirect logic that would otherwise swallow it.
+   */
+  it("does NOT redirect to login or throw for a 403 response, unlike a 401", async () => {
+    const replace = vi.fn();
+    (globalThis as { window?: unknown }).window = { location: { replace } };
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      status: 403,
+      ok: false,
+      json: async () => ({ error: { code: "forbidden", message: "Invalid credentials" } }),
+    }) as unknown as typeof fetch;
+
+    const response = await adminFetch("/admin/api/reset", {
+      method: "POST",
+      body: JSON.stringify({ password: "wrong" }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("redirects to login and throws 'unauthenticated' for a 401 response", async () => {
+    const replace = vi.fn();
+    (globalThis as { window?: unknown }).window = { location: { replace } };
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      status: 401,
+      ok: false,
+      json: async () => ({}),
+    }) as unknown as typeof fetch;
+
+    await expect(adminFetch("/admin/api/status")).rejects.toThrow("unauthenticated");
+    expect(replace).toHaveBeenCalledWith("/admin/login.html");
   });
 });
 

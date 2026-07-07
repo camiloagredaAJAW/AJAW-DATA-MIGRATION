@@ -191,6 +191,27 @@ th {
   font-weight: 600;
 }
 
+.danger-zone {
+  margin: 24px 0;
+  padding: 16px;
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  background: var(--danger-bg);
+}
+
+.danger-zone h2 {
+  margin-top: 0;
+  color: var(--danger);
+}
+
+.danger-zone input[type="password"] {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 14px;
+}
+
 .cell-input {
   width: 100%;
   padding: 4px 6px;

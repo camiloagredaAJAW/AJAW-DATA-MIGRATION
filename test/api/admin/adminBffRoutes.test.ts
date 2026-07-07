@@ -1,8 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import path from "node:path";
+import { Writable } from "node:stream";
+import Fastify from "fastify";
 import Database from "better-sqlite3";
 import { migrate } from "../../../src/db/migrate.js";
 import { buildServer } from "../../../src/api/server.js";
+import { adminPlugin } from "../../../src/api/admin/adminPlugin.js";
 import { upsertFieldMapping } from "../../../src/repos/mappingRepo.js";
 import type { AuthConfig } from "../../../src/api/auth/authGuard.js";
 import type { MigrationControlDeps } from "../../../src/api/routes/migrationControl.js";
@@ -10,6 +13,7 @@ import type { AxelorConfig } from "../../../src/config/env.js";
 import type { LeadsClientConfig } from "../../../src/leads/leadsClient.js";
 import type { AxelorSessionClient } from "../../../src/axelor/sessionClient.js";
 import type { MigrationEngineDeps, MigrationSummary } from "../../../src/migration/engine.js";
+import { createMigrationController } from "../../../src/migration/controller.js";
 import { createRun, updateRunStatus } from "../../../src/db/runsRepo.js";
 import { advanceOffset, setAiSearchId, upsertCheckpoint } from "../../../src/db/checkpointRepo.js";
 import { markResolved, recordError } from "../../../src/db/importErrorRepo.js";
@@ -767,6 +771,304 @@ describe("POST /admin/api/catalog/refresh", () => {
       method: "POST",
       url: "/admin/api/catalog/refresh",
       headers: { cookie },
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+});
+
+describe("POST /admin/api/reset", () => {
+  function fakeResetLeadsConfig(): LeadsClientConfig {
+    const fetchImpl = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ countries: { AR: {}, CO: {} }, databases: {} }),
+      text: async () => JSON.stringify({ countries: { AR: {}, CO: {} }, databases: {} }),
+    });
+    return {
+      ...fakeLeadsConfig(),
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    };
+  }
+
+  it("wipes every operational table and reseeds mappings + catalog on the correct password", async () => {
+    const db = freshDb();
+    const run = createRun(db);
+    // Stopped, not active: this test exercises the wipe/reseed path itself,
+    // not the active-run guard (covered separately below).
+    updateRunStatus(db, run.id, "stopped");
+    upsertCheckpoint(db, run.id, "AR");
+    recordError(db, {
+      runId: run.id,
+      countryCode: "AR",
+      recordOffset: 1,
+      recordIdentifier: "ACME",
+      errorReason: "boom",
+    });
+    upsertFieldMapping(db, {
+      sourceDb: "ar",
+      sourceTable: "companies",
+      sourceColumn: "legal_name",
+      destinationDomain: "AiSearchResults",
+      destinationField: "title",
+      additionalInfoKey: null,
+      confidence: "high",
+      note: null,
+      origin: "admin",
+    });
+    const deps: MigrationControlDeps = { ...fakeMigrationDeps(db), leadsConfig: fakeResetLeadsConfig() };
+    const server = buildServer({ db, authConfig, migrationDeps: deps });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/api/reset",
+      headers: adminMutateHeaders(cookie),
+      payload: { password: authConfig.password },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json().data;
+    expect(body.catalog.totalCatalogEntries).toBe(2);
+    expect(body.seed.totalRows).toBeGreaterThan(0);
+
+    const runsCount = (
+      db.prepare(`SELECT COUNT(*) as count FROM migration_runs`).get() as { count: number }
+    ).count;
+    const checkpointsCount = (
+      db.prepare(`SELECT COUNT(*) as count FROM migration_checkpoints`).get() as { count: number }
+    ).count;
+    const errorsCount = (
+      db.prepare(`SELECT COUNT(*) as count FROM import_errors`).get() as { count: number }
+    ).count;
+    expect(runsCount).toBe(0);
+    expect(checkpointsCount).toBe(0);
+    expect(errorsCount).toBe(0);
+
+    // The admin-edited row from before the reset is gone: field_mappings was
+    // wiped and reseeded from scratch, not selectively updated.
+    const adminOriginCount = (
+      db.prepare(`SELECT COUNT(*) as count FROM field_mappings WHERE origin = 'admin'`).get() as {
+        count: number;
+      }
+    ).count;
+    expect(adminOriginCount).toBe(0);
+
+    const catalogRows = db.prepare(`SELECT source_db FROM source_catalog ORDER BY source_db`).all();
+    expect(catalogRows).toEqual([{ source_db: "AR" }, { source_db: "CO" }]);
+  });
+
+  it("returns 403 and wipes nothing on the wrong password", async () => {
+    // 403, not 401: a 401 here would be intercepted by `adminFetch`'s
+    // blanket 401-to-login-redirect handling in app.js before the
+    // "Incorrect password." message could ever be shown (see fix #3).
+    const db = freshDb();
+    createRun(db);
+    const deps: MigrationControlDeps = { ...fakeMigrationDeps(db), leadsConfig: fakeResetLeadsConfig() };
+    const server = buildServer({ db, authConfig, migrationDeps: deps });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/api/reset",
+      headers: adminMutateHeaders(cookie),
+      payload: { password: "wrong-password" },
+    });
+
+    expect(response.statusCode).toBe(403);
+    const runsCount = (
+      db.prepare(`SELECT COUNT(*) as count FROM migration_runs`).get() as { count: number }
+    ).count;
+    expect(runsCount).toBe(1);
+  });
+
+  it("returns 403 (not 401) and wipes nothing for a shorter incorrect password", async () => {
+    // Exercises timingSafeEqual's length-mismatch path (fix #5): must not
+    // throw, and must correctly report "not equal".
+    const db = freshDb();
+    createRun(db);
+    const deps: MigrationControlDeps = { ...fakeMigrationDeps(db), leadsConfig: fakeResetLeadsConfig() };
+    const server = buildServer({ db, authConfig, migrationDeps: deps });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/api/reset",
+      headers: adminMutateHeaders(cookie),
+      payload: { password: "x" },
+    });
+
+    expect(response.statusCode).toBe(403);
+    const runsCount = (
+      db.prepare(`SELECT COUNT(*) as count FROM migration_runs`).get() as { count: number }
+    ).count;
+    expect(runsCount).toBe(1);
+  });
+
+  it("returns 403 on a malformed body (missing password / extra field)", async () => {
+    const db = freshDb();
+    const deps: MigrationControlDeps = { ...fakeMigrationDeps(db), leadsConfig: fakeResetLeadsConfig() };
+    const server = buildServer({ db, authConfig, migrationDeps: deps });
+    const cookie = await adminLoginCookie(server);
+
+    const missingPassword = await server.inject({
+      method: "POST",
+      url: "/admin/api/reset",
+      headers: adminMutateHeaders(cookie),
+      payload: {},
+    });
+    expect(missingPassword.statusCode).toBe(403);
+
+    const extraField = await server.inject({
+      method: "POST",
+      url: "/admin/api/reset",
+      headers: adminMutateHeaders(cookie),
+      payload: { password: authConfig.password, extra: "nope" },
+    });
+    expect(extraField.statusCode).toBe(403);
+  });
+
+  it("returns 409 and wipes nothing when a migration run is currently active", async () => {
+    const db = freshDb();
+    createRun(db); // createRun defaults to status='running', i.e. active.
+    upsertFieldMapping(db, {
+      sourceDb: "ar",
+      sourceTable: "companies",
+      sourceColumn: "legal_name",
+      destinationDomain: "AiSearchResults",
+      destinationField: "title",
+      additionalInfoKey: null,
+      confidence: "high",
+      note: null,
+      origin: "bootstrap",
+    });
+    const deps: MigrationControlDeps = { ...fakeMigrationDeps(db), leadsConfig: fakeResetLeadsConfig() };
+    const server = buildServer({ db, authConfig, migrationDeps: deps });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/api/reset",
+      headers: adminMutateHeaders(cookie),
+      payload: { password: authConfig.password },
+    });
+
+    expect(response.statusCode).toBe(409);
+    const runsCount = (
+      db.prepare(`SELECT COUNT(*) as count FROM migration_runs`).get() as { count: number }
+    ).count;
+    const mappingsCount = (
+      db.prepare(`SELECT COUNT(*) as count FROM field_mappings`).get() as { count: number }
+    ).count;
+    expect(runsCount).toBe(1);
+    expect(mappingsCount).toBeGreaterThan(0);
+  });
+
+  it("returns a properly-shaped 500 and logs an error when re-seeding fails after the wipe already committed", async () => {
+    const db = freshDb();
+    const run = createRun(db);
+    upsertCheckpoint(db, run.id, "AR");
+    // Stopped so the active-run guard (fix #1) doesn't reject before reaching
+    // the reseed step this test targets.
+    updateRunStatus(db, run.id, "stopped");
+
+    const failingFetchImpl = vi.fn().mockRejectedValue(new Error("network unreachable"));
+    const deps: MigrationControlDeps = {
+      ...fakeMigrationDeps(db),
+      leadsConfig: { ...fakeLeadsConfig(), fetchImpl: failingFetchImpl as unknown as typeof fetch },
+    };
+    const controller = createMigrationController(db, deps);
+
+    // Built directly (not via buildServer, which silences its logger under
+    // NODE_ENV=test) with a real pino logger writing to a capturable stream,
+    // so the `request.log.error(...)` call this route makes on this failure
+    // path is actually observable — this codebase has no error-tracking
+    // integration, so that log line is the only production visibility this
+    // failure will ever get.
+    const logLines: string[] = [];
+    const stream = new Writable({
+      write(chunk, _encoding, callback) {
+        logLines.push(chunk.toString());
+        callback();
+      },
+    });
+    const fastify = Fastify({ logger: { stream, level: "error" } });
+    await fastify.register(adminPlugin, { db, authConfig, controller });
+    await fastify.ready();
+
+    const cookie = await adminLoginCookie(fastify);
+    const response = await fastify.inject({
+      method: "POST",
+      url: "/admin/api/reset",
+      headers: adminMutateHeaders(cookie),
+      payload: { password: authConfig.password },
+    });
+
+    expect(response.statusCode).toBe(500);
+    const body = response.json();
+    expect(body.error.code).toBe("internal_error");
+    expect(body.error.message).toContain("Reset wiped all tables successfully, but re-seeding failed");
+    expect(body.error.message).toContain("network unreachable");
+
+    // Documents the exact known degraded state: `runFullReset` wipes
+    // everything, then runs `runSeed` (succeeds, since it depends only on
+    // the committed local JSON dataset, not the network) before awaiting
+    // `runRefreshCatalog` (fails, since `fetchImpl` rejects). So
+    // field_mappings IS repopulated, but every other operational table is
+    // left empty — this is the exact state the thrown error's message tells
+    // the operator to recover from manually.
+    const runsCount = (
+      db.prepare(`SELECT COUNT(*) as count FROM migration_runs`).get() as { count: number }
+    ).count;
+    const checkpointsCount = (
+      db.prepare(`SELECT COUNT(*) as count FROM migration_checkpoints`).get() as { count: number }
+    ).count;
+    const catalogCount = (
+      db.prepare(`SELECT COUNT(*) as count FROM source_catalog`).get() as { count: number }
+    ).count;
+    const mappingsCount = (
+      db.prepare(`SELECT COUNT(*) as count FROM field_mappings`).get() as { count: number }
+    ).count;
+    expect(runsCount).toBe(0);
+    expect(checkpointsCount).toBe(0);
+    expect(catalogCount).toBe(0);
+    expect(mappingsCount).toBeGreaterThan(0);
+
+    const parsedLogLines = logLines
+      .map((line) => JSON.parse(line) as { level: number; msg: string; err?: string });
+    const errorLogLine = parsedLogLines.find((line) =>
+      line.msg?.includes("admin reset failed after wiping operational tables"),
+    );
+    expect(errorLogLine).toBeDefined();
+    expect(errorLogLine?.level).toBe(50); // pino's numeric "error" level
+    expect(errorLogLine?.err).toContain("network unreachable");
+  });
+
+  it("rejects a reset without an authenticated session", async () => {
+    const db = freshDb();
+    const deps: MigrationControlDeps = { ...fakeMigrationDeps(db), leadsConfig: fakeResetLeadsConfig() };
+    const server = buildServer({ db, authConfig, migrationDeps: deps });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/api/reset",
+      payload: { password: authConfig.password },
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("rejects a reset missing the CSRF header even with a valid session", async () => {
+    const db = freshDb();
+    const deps: MigrationControlDeps = { ...fakeMigrationDeps(db), leadsConfig: fakeResetLeadsConfig() };
+    const server = buildServer({ db, authConfig, migrationDeps: deps });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/api/reset",
+      headers: { cookie },
+      payload: { password: authConfig.password },
     });
 
     expect(response.statusCode).toBe(403);

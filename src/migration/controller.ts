@@ -15,7 +15,7 @@ import {
 } from "../db/importErrorRepo.js";
 import { retrySingleRecord, type RetryOutcome } from "./retry.js";
 import { runMigration, type MigrationEngineDeps, type MigrationSummary } from "./engine.js";
-import { runRefreshCatalog, type RefreshCatalogResult } from "../cli/bootstrap.js";
+import { runFullReset, runRefreshCatalog, type FullResetResult, type RefreshCatalogResult } from "../cli/bootstrap.js";
 
 /** Every engine dependency except the ones the controller derives per-call (`countries`, `runId`). */
 export type MigrationControllerDeps = Omit<MigrationEngineDeps, "countries" | "runId">;
@@ -32,6 +32,17 @@ export interface MigrationRunSummary {
 
 export type ControlActionOutcome =
   | { readonly outcome: "ok"; readonly run: MigrationRunSummary }
+  | { readonly outcome: "conflict"; readonly message: string };
+
+/**
+ * `resetEverything()`'s outcome: unlike the passthrough it used to be, it can
+ * no longer unconditionally succeed — an active migration run (or a
+ * concurrent reset already in flight) must reject with `"conflict"` instead
+ * of wiping `migration_runs`/`migration_checkpoints` out from under the
+ * in-flight engine loop. Mirrors `ControlActionOutcome`'s shape/naming.
+ */
+export type ResetActionOutcome =
+  | { readonly outcome: "ok"; readonly result: FullResetResult }
   | { readonly outcome: "conflict"; readonly message: string };
 
 export interface MigrationStatusCheckpoint {
@@ -74,6 +85,19 @@ export interface MigrationController {
   retry(errorId: number): Promise<RetryOutcome>;
   /** Thin passthrough to `runRefreshCatalog` — see its doc comment for what it does. */
   refreshCatalog(): Promise<RefreshCatalogResult>;
+  /**
+   * Delegates to `runFullReset` — see its doc comment for what it does.
+   * DESTRUCTIVE AND IRREVERSIBLE; the password re-check gating this lives in
+   * `adminPlugin.ts`, not here, since this controller has no notion of HTTP
+   * requests or credentials.
+   *
+   * Rejects with `{ outcome: "conflict" }` (WITHOUT wiping anything) when a
+   * migration run is currently active (same `getActiveRun(db) !== null`
+   * check `start()` uses) or when another reset is already in flight (see
+   * `resetInFlight` in the factory below) — both HTTP surfaces call this same
+   * shared instance.
+   */
+  resetEverything(): Promise<ResetActionOutcome>;
 }
 
 /**
@@ -109,6 +133,18 @@ export function createMigrationController(
    * writes. Mirrors `registry`'s add-on-start/delete-in-`finally` shape above.
    */
   const inFlightRetries = new Set<number>();
+
+  /**
+   * True while a `resetEverything()` call is between its active-run check
+   * and the completion of `runFullReset` (wipe + reseed). Only one process-
+   * wide reset may run at a time: two near-simultaneous `POST
+   * /admin/api/reset` calls (e.g. two browser tabs) would otherwise both
+   * pass the `getActiveRun(db) === null` check and interleave their
+   * wipe+reseed sequences. Mirrors `inFlightRetries`'
+   * add-before-await/remove-in-`finally` shape, collapsed to a single
+   * boolean since `resetEverything()` takes no id to key a `Set` by.
+   */
+  let resetInFlight = false;
 
   function launch(runId: number): void {
     const promise = runMigrationFn({ ...deps, runId });
@@ -217,6 +253,23 @@ export function createMigrationController(
 
     async refreshCatalog(): Promise<RefreshCatalogResult> {
       return runRefreshCatalog(db, deps.leadsConfig);
+    },
+
+    async resetEverything(): Promise<ResetActionOutcome> {
+      if (resetInFlight) {
+        return { outcome: "conflict", message: "A reset is already in progress" };
+      }
+      if (getActiveRun(db) !== null) {
+        return { outcome: "conflict", message: "Cannot reset while a migration run is active" };
+      }
+
+      resetInFlight = true;
+      try {
+        const result = await runFullReset(db, deps.leadsConfig);
+        return { outcome: "ok", result };
+      } finally {
+        resetInFlight = false;
+      }
     },
   };
 }

@@ -2,12 +2,16 @@ import { describe, expect, it, vi } from "vitest";
 import path from "node:path";
 import Database from "better-sqlite3";
 import {
+  runFullReset,
   runMigrate,
   runRefreshCatalog,
   runSample,
   runSeed,
 } from "../../src/cli/bootstrap.js";
 import type { LeadsClientConfig } from "../../src/leads/leadsClient.js";
+import { createRun } from "../../src/db/runsRepo.js";
+import { upsertCheckpoint } from "../../src/db/checkpointRepo.js";
+import { recordError } from "../../src/db/importErrorRepo.js";
 
 const migrationsDir = path.join(process.cwd(), "src", "migrations");
 const seedJsonPath = path.join(
@@ -69,6 +73,79 @@ describe("bootstrap CLI: migrate + seed", () => {
       count: number;
     };
     expect(countRow.count).toBe(163);
+  });
+});
+
+describe("bootstrap CLI: full reset", () => {
+  it("wipes every operational table and reseeds field_mappings + source_catalog in one step", async () => {
+    const db = bootstrappedDb();
+    runSeed(db, seedJsonPath);
+    const run = createRun(db);
+    upsertCheckpoint(db, run.id, "AR");
+    recordError(db, {
+      runId: run.id,
+      countryCode: "AR",
+      recordOffset: 1,
+      recordIdentifier: "ACME",
+      errorReason: "boom",
+    });
+    db.prepare(
+      `INSERT INTO source_catalog (source_db, source_table, last_sampled_at)
+       VALUES ('ZZ', 'companies', '2020-01-01T00:00:00.000Z')`,
+    ).run();
+
+    const leadsConfig = fakeLeadsConfig({ AR: {}, CO: {} }, {});
+
+    const result = await runFullReset(db, leadsConfig);
+
+    expect(result.seed.totalRows).toBe(163);
+    expect(result.catalog.totalCatalogEntries).toBe(2);
+
+    const runsCount = (
+      db.prepare(`SELECT COUNT(*) as count FROM migration_runs`).get() as { count: number }
+    ).count;
+    const checkpointsCount = (
+      db.prepare(`SELECT COUNT(*) as count FROM migration_checkpoints`).get() as { count: number }
+    ).count;
+    const errorsCount = (
+      db.prepare(`SELECT COUNT(*) as count FROM import_errors`).get() as { count: number }
+    ).count;
+    expect(runsCount).toBe(0);
+    expect(checkpointsCount).toBe(0);
+    expect(errorsCount).toBe(0);
+
+    const mappingsCount = (
+      db.prepare(`SELECT COUNT(*) as count FROM field_mappings`).get() as { count: number }
+    ).count;
+    expect(mappingsCount).toBe(163);
+
+    const catalogRows = db.prepare(`SELECT source_db FROM source_catalog ORDER BY source_db`).all();
+    expect(catalogRows).toEqual([{ source_db: "AR" }, { source_db: "CO" }]);
+  });
+
+  it("wraps a post-wipe reseed failure in a single self-describing Error with manual-recovery instructions", async () => {
+    const db = bootstrappedDb();
+    runSeed(db, seedJsonPath);
+
+    const failingFetchImpl = vi.fn().mockRejectedValue(new Error("network unreachable"));
+    const leadsConfig: LeadsClientConfig = {
+      baseUrl: "http://leads.example.test",
+      dbsPath: "dbs",
+      companiesPath: "companies",
+      keyValue: "ajaw_live_2026",
+      fetchImpl: failingFetchImpl as unknown as typeof fetch,
+    };
+
+    await expect(runFullReset(db, leadsConfig)).rejects.toThrow(
+      /Reset wiped all tables successfully, but re-seeding failed: network unreachable.*run 'npm run seed' and 'npm run refresh'/s,
+    );
+
+    // The wipe itself already committed before the reseed step failed:
+    // migration_runs stays empty regardless of what happens afterward.
+    const runsCount = (
+      db.prepare(`SELECT COUNT(*) as count FROM migration_runs`).get() as { count: number }
+    ).count;
+    expect(runsCount).toBe(0);
   });
 });
 

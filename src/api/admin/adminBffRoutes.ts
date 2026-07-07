@@ -44,8 +44,20 @@ function notFoundError(message: string): { error: { code: string; message: strin
   return { error: { code: "not_found", message } };
 }
 
-function conflictError(message: string): { error: { code: string; message: string } } {
+/** Exported for reuse by `adminPlugin.ts`'s `POST /admin/api/reset`, whose control-action conflict outcome (active run, or a reset already in flight) uses this same shape/status-code convention. */
+export function conflictError(message: string): { error: { code: string; message: string } } {
   return { error: { code: "conflict", message } };
+}
+
+/**
+ * Exported for reuse by `adminPlugin.ts`'s `POST /admin/api/reset`: the one
+ * route in this codebase where a handler can throw AFTER partially mutating
+ * state (the wipe-succeeded-but-reseed-failed case in `runFullReset`), so a
+ * properly-shaped 500 — not Fastify's default error-handler shape — is what
+ * the operator sees.
+ */
+export function internalError(message: string): { error: { code: string; message: string } } {
+  return { error: { code: "internal_error", message } };
 }
 
 /**
