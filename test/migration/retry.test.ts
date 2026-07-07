@@ -306,4 +306,44 @@ describe("retrySingleRecord", () => {
     expect(updated?.errorReason).not.toBe("first failure reason");
     expect(updated?.errorReason).toMatch(/status 1/);
   });
+
+  it("includes the underlying cause of a network-level fetch failure in the recorded reason", async () => {
+    const db = freshDb();
+    seedTitleMapping(db, "AR");
+    const run = createRun(db);
+    const checkpoint = upsertCheckpoint(db, run.id, "AR");
+    setAiSearchId(db, checkpoint.id, 999);
+    const error = recordError(db, {
+      runId: run.id,
+      countryCode: "AR",
+      recordOffset: 20,
+      recordIdentifier: "ACME",
+      errorReason: "boom",
+    });
+
+    const leadsFetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(textResponse(jsonLine({ legal_name: "ACME" })));
+    const axelorFetchImpl = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new TypeError("fetch failed", { cause: new Error("connect ECONNREFUSED 127.0.0.1:443") }),
+      );
+
+    const deps: RetrySingleRecordDeps = {
+      db,
+      leadsConfig: leadsConfig(leadsFetchImpl as unknown as typeof fetch),
+      axelorConfig: axelorConfig(),
+      session: fakeSession(),
+      fetchImpl: axelorFetchImpl as unknown as typeof fetch,
+    };
+
+    const result = await retrySingleRecord(deps, error.id);
+
+    expect(result.outcome).toBe("failed");
+    if (result.outcome === "failed") {
+      expect(result.reason).toMatch(/fetch failed/);
+      expect(result.reason).toMatch(/ECONNREFUSED/);
+    }
+  });
 });

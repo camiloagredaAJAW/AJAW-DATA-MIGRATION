@@ -42,8 +42,18 @@ export type RetryOutcome =
   | { readonly outcome: "resolved"; readonly importError: ImportErrorRow }
   | { readonly outcome: "failed"; readonly importError: ImportErrorRow; readonly reason: string };
 
+/**
+ * A network-level fetch failure (e.g. ECONNREFUSED, DNS failure, a rejected
+ * TLS certificate) surfaces as a generic `TypeError: fetch failed` with the
+ * actual root cause nested in `error.cause` — dropping it would make every
+ * connectivity problem to Axelor or the Leads DB indistinguishable from any
+ * other failure in `import_errors.error_reason`/the server log.
+ */
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
+  return error.cause instanceof Error ? `${error.message}: ${error.cause.message}` : error.message;
 }
 
 /**
