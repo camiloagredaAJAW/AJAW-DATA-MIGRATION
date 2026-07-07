@@ -76,7 +76,16 @@ export function createSessionClient(
     });
 
     if (!response.ok) {
-      throw new Error(`Axelor login failed with status ${response.status}`);
+      // login.jsp is a servlet endpoint — a non-2xx response body (HTML error
+      // page, stack trace, JSON error) almost always carries the actual
+      // reason a generic status code hides. Best-effort: response bodies
+      // aren't guaranteed readable twice, so a read failure here must never
+      // mask the original status-code error.
+      const bodyPreview = await response
+        .text()
+        .then((text) => text.slice(0, 500))
+        .catch(() => "<unreadable response body>");
+      throw new Error(`Axelor login failed with status ${response.status}: ${bodyPreview}`);
     }
 
     return { authHeader, cookieHeader: extractCookieHeader(response) };

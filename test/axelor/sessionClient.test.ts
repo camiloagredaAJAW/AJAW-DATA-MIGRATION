@@ -12,7 +12,7 @@ function baseConfig(): AxelorConfig {
   };
 }
 
-function loginResponse(cookies: string[], ok = true, status = 200): Response {
+function loginResponse(cookies: string[], ok = true, status = 200, bodyText = ""): Response {
   return {
     ok,
     status,
@@ -20,6 +20,7 @@ function loginResponse(cookies: string[], ok = true, status = 200): Response {
       getSetCookie: () => cookies,
       get: () => null,
     },
+    text: () => Promise.resolve(bodyText),
   } as unknown as Response;
 }
 
@@ -74,5 +75,26 @@ describe("createSessionClient", () => {
     const client = createSessionClient(baseConfig(), fetchImpl as unknown as typeof fetch);
 
     await expect(client.getSession()).rejects.toThrow(/401/);
+  });
+
+  it("includes the response body in the error when login fails", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(loginResponse([], false, 500, "java.lang.NullPointerException at ..."));
+    const client = createSessionClient(baseConfig(), fetchImpl as unknown as typeof fetch);
+
+    await expect(client.getSession()).rejects.toThrow(/NullPointerException/);
+  });
+
+  it("still throws the status-code error when the response body cannot be read", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      headers: { getSetCookie: () => [], get: () => null },
+      text: () => Promise.reject(new Error("stream already consumed")),
+    } as unknown as Response);
+    const client = createSessionClient(baseConfig(), fetchImpl as unknown as typeof fetch);
+
+    await expect(client.getSession()).rejects.toThrow(/500/);
   });
 });
