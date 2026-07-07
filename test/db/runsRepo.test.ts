@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { migrate } from "../../src/db/migrate.js";
-import { createRun, updateRunStatus, getActiveRun } from "../../src/db/runsRepo.js";
+import {
+  createRun,
+  updateRunStatus,
+  getActiveRun,
+  getMostRecentRun,
+} from "../../src/db/runsRepo.js";
 
 const migrationsDir = path.join(process.cwd(), "src", "migrations");
 
@@ -107,5 +112,47 @@ describe("getActiveRun", () => {
     const active = getActiveRun(db);
 
     expect(active?.id).toBe(second.id);
+  });
+});
+
+describe("getMostRecentRun", () => {
+  it("returns null when no run has ever been created", () => {
+    const db = freshDb();
+
+    expect(getMostRecentRun(db)).toBeNull();
+  });
+
+  it("returns the run when its status is running", () => {
+    const db = freshDb();
+    const run = createRun(db);
+
+    const mostRecent = getMostRecentRun(db);
+
+    expect(mostRecent?.id).toBe(run.id);
+    expect(mostRecent?.status).toBe("running");
+  });
+
+  it("returns the most recent run even when it is completed", () => {
+    const db = freshDb();
+    const run = createRun(db);
+    updateRunStatus(db, run.id, "completed");
+
+    const mostRecent = getMostRecentRun(db);
+
+    expect(mostRecent?.id).toBe(run.id);
+    expect(mostRecent?.status).toBe("completed");
+  });
+
+  it("returns the most recent run even when it is stopped, ignoring an earlier active run", () => {
+    const db = freshDb();
+    const first = createRun(db);
+    const second = createRun(db);
+    updateRunStatus(db, second.id, "stopped");
+
+    const mostRecent = getMostRecentRun(db);
+
+    expect(mostRecent?.id).toBe(second.id);
+    expect(mostRecent?.status).toBe("stopped");
+    expect(first.id).not.toBe(second.id);
   });
 });

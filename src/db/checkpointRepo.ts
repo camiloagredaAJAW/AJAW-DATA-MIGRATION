@@ -47,10 +47,41 @@ export function getByRunCountry(
 }
 
 /**
- * Ensures a checkpoint row exists for (run_id, country_code), creating it
- * with status='pending' and last_offset=0 on first call. Idempotent: a
+ * Reads the most recently updated checkpoint for a country across ANY run,
+ * or null if that country has never been checkpointed at all. Used to carry
+ * forward a prior run's progress (offset + AiSearch parent id) into a
+ * brand-new run for the same country, instead of silently restarting it
+ * from 0 (e.g. a `/stop` followed by a fresh `/start`).
+ */
+export function getMostRecentCheckpointForCountry(
+  db: Database.Database,
+  countryCode: string,
+): MigrationCheckpointRow | null {
+  const row = db
+    .prepare(`
+      SELECT * FROM migration_checkpoints
+      WHERE country_code = ?
+      ORDER BY updated_at DESC, id DESC
+      LIMIT 1
+    `)
+    .get(countryCode) as Record<string, unknown> | undefined;
+
+  return row === undefined ? null : mapSqlRowToCheckpointRow(row);
+}
+
+/**
+ * Ensures a checkpoint row exists for (run_id, country_code). Idempotent: a
  * second call for the same pair returns the existing row untouched (never
  * resets progress already made for that country in this run).
+ *
+ * On first creation for a given run, this does NOT blindly default to
+ * last_offset=0/ai_search_id=null. It first looks up the most recent
+ * checkpoint for that country across ANY prior run and seeds the new row
+ * from it (carrying forward offset + AiSearch parent id). This is what
+ * makes a brand-new run started after a `/stop` resume that country from
+ * its last persisted offset instead of restarting it from scratch. Only
+ * when the country has never been checkpointed by any run does it fall
+ * back to the original 0/null defaults.
  */
 export function upsertCheckpoint(
   db: Database.Database,
@@ -62,20 +93,37 @@ export function upsertCheckpoint(
     return existing;
   }
 
+  const priorCheckpoint = getMostRecentCheckpointForCountry(db, countryCode);
+  const seedOffset = priorCheckpoint?.lastOffset ?? 0;
+  const seedAiSearchId = priorCheckpoint?.aiSearchId ?? null;
+
   const now = new Date().toISOString();
   const result = db
     .prepare(`
       INSERT INTO migration_checkpoints
-        (run_id, country_code, last_offset, status, created_at, updated_at)
-      VALUES (?, ?, 0, 'pending', ?, ?)
+        (run_id, country_code, ai_search_id, last_offset, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 'pending', ?, ?)
     `)
-    .run(runId, countryCode, now, now);
+    .run(runId, countryCode, seedAiSearchId, seedOffset, now, now);
 
   const checkpoint = getCheckpointById(db, Number(result.lastInsertRowid));
   if (checkpoint === null) {
     throw new Error("Failed to read back newly created migration_checkpoints row");
   }
   return checkpoint;
+}
+
+/**
+ * Lists every checkpoint for a run, ordered by country_code, so a status
+ * endpoint can report per-country progress. Returns an empty array when the
+ * run has no checkpoints yet.
+ */
+export function listByRun(db: Database.Database, runId: number): MigrationCheckpointRow[] {
+  const rows = db
+    .prepare(`SELECT * FROM migration_checkpoints WHERE run_id = ? ORDER BY country_code`)
+    .all(runId) as Record<string, unknown>[];
+
+  return rows.map(mapSqlRowToCheckpointRow);
 }
 
 /** Sets last_offset on an existing checkpoint. Returns null if it does not exist. */
