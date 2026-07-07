@@ -82,6 +82,10 @@ export function registerAdminBffRoutes(
 
     const row = getFieldMappingById(db, parsedParams.data.id);
     if (row === null) {
+      request.log.warn(
+        { route: "GET /admin/api/field-mappings/:id", reason: "not_found" },
+        "admin field-mapping lookup failed",
+      );
       return reply.code(404).send(notFoundError("field_mapping not found"));
     }
     return reply.send({ data: row });
@@ -100,6 +104,10 @@ export function registerAdminBffRoutes(
 
     const updated = adminUpdateFieldMapping(db, parsedParams.data.id, parsedBody.data);
     if (updated === null) {
+      request.log.warn(
+        { route: "PUT /admin/api/field-mappings/:id", reason: "not_found" },
+        "admin field-mapping update failed",
+      );
       return reply.code(404).send(notFoundError("field_mapping not found"));
     }
     return reply.send({ data: updated });
@@ -140,45 +148,79 @@ export function registerAdminBffRoutes(
     const outcome = await controller.retry(parsedParams.data.id);
     switch (outcome.outcome) {
       case "not_found":
+        request.log.warn(
+          { route: "POST /admin/api/errors/:id/retry", reason: "not_found" },
+          "admin error retry failed",
+        );
         return reply.code(404).send(notFoundError("import_errors row not found"));
       case "already_resolved":
+        request.log.warn(
+          { route: "POST /admin/api/errors/:id/retry", reason: "already_resolved" },
+          "admin error retry failed",
+        );
         return reply.code(409).send(conflictError("import_errors row is already resolved"));
+      case "retry_in_progress":
+        request.log.warn(
+          { route: "POST /admin/api/errors/:id/retry", reason: "retry_in_progress" },
+          "admin error retry failed",
+        );
+        return reply.code(409).send(conflictError("import_errors row retry is already in progress"));
       case "resolved":
         return reply.send({ data: { outcome: "resolved", importError: outcome.importError } });
       case "failed":
+        request.log.warn(
+          { route: "POST /admin/api/errors/:id/retry", reason: "failed", failureReason: outcome.reason },
+          "admin error retry failed",
+        );
         return reply.code(422).send({
           data: { outcome: "failed", importError: outcome.importError, reason: outcome.reason },
         });
     }
   });
 
-  fastify.post("/admin/api/migration/start", async (_request, reply) => {
+  fastify.post("/admin/api/migration/start", async (request, reply) => {
     const result = controller.start();
     if (result.outcome === "conflict") {
+      request.log.warn(
+        { route: "POST /admin/api/migration/start", reason: result.message },
+        "admin migration control action rejected",
+      );
       return reply.code(409).send(conflictError(result.message));
     }
     return reply.code(202).send({ data: result.run });
   });
 
-  fastify.post("/admin/api/migration/pause", async (_request, reply) => {
+  fastify.post("/admin/api/migration/pause", async (request, reply) => {
     const result = controller.pause();
     if (result.outcome === "conflict") {
+      request.log.warn(
+        { route: "POST /admin/api/migration/pause", reason: result.message },
+        "admin migration control action rejected",
+      );
       return reply.code(409).send(conflictError(result.message));
     }
     return reply.send({ data: result.run });
   });
 
-  fastify.post("/admin/api/migration/resume", async (_request, reply) => {
+  fastify.post("/admin/api/migration/resume", async (request, reply) => {
     const result = controller.resume();
     if (result.outcome === "conflict") {
+      request.log.warn(
+        { route: "POST /admin/api/migration/resume", reason: result.message },
+        "admin migration control action rejected",
+      );
       return reply.code(409).send(conflictError(result.message));
     }
     return reply.code(202).send({ data: result.run });
   });
 
-  fastify.post("/admin/api/migration/stop", async (_request, reply) => {
+  fastify.post("/admin/api/migration/stop", async (request, reply) => {
     const result = controller.stop();
     if (result.outcome === "conflict") {
+      request.log.warn(
+        { route: "POST /admin/api/migration/stop", reason: result.message },
+        "admin migration control action rejected",
+      );
       return reply.code(409).send(conflictError(result.message));
     }
     return reply.send({ data: result.run });

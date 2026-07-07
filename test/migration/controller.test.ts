@@ -321,5 +321,65 @@ describe("createMigrationController", () => {
         expect(outcome.importError.resolved).toBe(true);
       }
     });
+
+    it("rejects a concurrent retry for the same errorId while one is already in flight, without a duplicate Axelor write", async () => {
+      const db = freshDb();
+      seedTitleMapping(db, "AR");
+      const run = createRun(db);
+      const checkpoint = upsertCheckpoint(db, run.id, "AR");
+      setAiSearchId(db, checkpoint.id, 999);
+      const errorRow = recordError(db, {
+        runId: run.id,
+        countryCode: "AR",
+        recordOffset: 5,
+        recordIdentifier: "ACME",
+        errorReason: "boom",
+      });
+
+      // Deferred gate: holds the first retry's leads re-fetch open so a
+      // second retry for the SAME errorId can be issued while the first is
+      // still mid-flight, forcing the race deterministically instead of
+      // relying on real timing.
+      let releaseLeadsFetch: () => void = () => {};
+      const leadsGate = new Promise<void>((resolve) => {
+        releaseLeadsFetch = resolve;
+      });
+      const leadsFetchImpl = vi.fn().mockImplementation(async () => {
+        await leadsGate;
+        return textResponse(`{"legal_name":"ACME"}`);
+      });
+      const axelorFetchImpl = vi
+        .fn()
+        .mockResolvedValue(jsonResponse({ status: 0, data: [{ id: 555 }] }));
+      const deps: MigrationControllerDeps = {
+        db,
+        leadsConfig: { ...fakeLeadsConfig(), fetchImpl: leadsFetchImpl as unknown as typeof fetch },
+        axelorConfig: fakeAxelorConfig(),
+        pageLimit: 100,
+        session: fakeSession(),
+        fetchImpl: axelorFetchImpl as unknown as typeof fetch,
+      };
+      const controller = createMigrationController(db, deps);
+
+      const firstRetry = controller.retry(errorRow.id);
+      await flushMicrotasks();
+
+      const secondOutcome = await controller.retry(errorRow.id);
+
+      expect(secondOutcome.outcome).toBe("retry_in_progress");
+      expect(axelorFetchImpl).not.toHaveBeenCalled();
+
+      releaseLeadsFetch();
+      const firstOutcome = await firstRetry;
+
+      expect(firstOutcome.outcome).toBe("resolved");
+      expect(axelorFetchImpl).toHaveBeenCalledTimes(1);
+
+      // The lock is released once the in-flight retry settles: a subsequent
+      // retry for the same (now-resolved) errorId is no longer blocked by
+      // the concurrency guard — it short-circuits on `already_resolved`.
+      const thirdOutcome = await controller.retry(errorRow.id);
+      expect(thirdOutcome.outcome).toBe("already_resolved");
+    });
   });
 });
