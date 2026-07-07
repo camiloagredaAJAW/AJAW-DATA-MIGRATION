@@ -48,7 +48,10 @@ export interface BuildServerOptions {
  * (tests).
  */
 export function buildServer(options: BuildServerOptions): FastifyInstance {
-  const fastify = Fastify({ logger: false });
+  // Silenced under `vitest run` (NODE_ENV=test) to keep test output clean;
+  // the /admin auth guard relies on request.log.warn for brute-force/CSRF
+  // visibility, which is a no-op without a real logger instance.
+  const fastify = Fastify({ logger: process.env.NODE_ENV !== "test" });
   // Built once here (not inside registerMigrationControlRoutes) so a future
   // `/admin/*` scope can share this exact instance instead of running a
   // second, independent registry against the same DB.

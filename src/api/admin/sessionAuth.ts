@@ -23,6 +23,10 @@ export function isAdminSessionAuthenticated(session: AdminSessionState | undefin
  */
 export async function requireAdminSession(request: FastifyRequest, reply: FastifyReply): Promise<void> {
   if (!isAdminSessionAuthenticated(request.session)) {
+    request.log.warn(
+      { route: `${request.method} ${request.url}`, reason: "no_authenticated_session" },
+      "admin session guard rejected request",
+    );
     reply.code(401).send({
       error: { code: "unauthorized", message: "Authentication required" },
     });
@@ -50,6 +54,10 @@ export async function requireCsrfHeader(request: FastifyRequest, reply: FastifyR
     return;
   }
   if (request.headers[CSRF_HEADER] === undefined) {
+    request.log.warn(
+      { route: `${request.method} ${request.url}`, reason: "missing_csrf_header" },
+      "admin CSRF guard rejected request",
+    );
     reply.code(403).send({
       error: { code: "csrf_header_required", message: "X-Requested-With header required" },
     });

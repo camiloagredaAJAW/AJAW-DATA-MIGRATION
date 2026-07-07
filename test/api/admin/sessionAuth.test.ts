@@ -19,11 +19,14 @@ function fakeRequest(overrides: {
   session?: { authenticated?: boolean };
   method?: string;
   headers?: Record<string, string>;
+  url?: string;
 }): FastifyRequest {
   return {
     session: overrides.session,
     method: overrides.method ?? "GET",
     headers: overrides.headers ?? {},
+    url: overrides.url ?? "/admin/api/session",
+    log: { warn: vi.fn() },
   } as unknown as FastifyRequest;
 }
 

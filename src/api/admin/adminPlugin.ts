@@ -29,6 +29,37 @@ const loginBodySchema = z
   .strict();
 
 /**
+ * Session cookie lifetime: 12 hours. No existing env var convention for
+ * durations in this codebase (`src/config/env.ts` only reads connection and
+ * pagination config), so this is hardcoded rather than introducing a new
+ * single-use env var.
+ */
+const SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+
+/** `@fastify/session`'s default `cookieName`; not overridden by this plugin's registration. */
+const SESSION_COOKIE_NAME = "sessionId";
+
+/**
+ * Environments where the session cookie is intentionally sent over plain
+ * HTTP (local dev / test runners). Every other value — including an unset
+ * or misspelled `NODE_ENV` — fails CLOSED to `secure: true`, since silently
+ * defaulting to non-secure would leak the session cookie over HTTP in any
+ * real deployment that forgets to set `NODE_ENV=production` exactly.
+ */
+const INSECURE_COOKIE_ENVIRONMENTS = new Set(["development", "test"]);
+
+/**
+ * Pure predicate so the fail-closed `NODE_ENV` logic can be unit-tested
+ * directly: `@fastify/session` silently drops `Set-Cookie` entirely for a
+ * `secure` cookie served over the plain-HTTP connection `fastify.inject()`
+ * simulates, which would make the fail-open regression this guards against
+ * untestable through an end-to-end login request alone.
+ */
+export function isSecureCookieEnvironment(nodeEnv: string | undefined): boolean {
+  return !INSECURE_COOKIE_ENVIRONMENTS.has(nodeEnv ?? "");
+}
+
+/**
  * Derives the session-signing secret from `INTERNAL_API_KEY` instead of
  * introducing a new env var: `@fastify/session` requires >=32 chars, and
  * hashing (rather than reusing the raw key) keeps the key's own value out of
@@ -63,13 +94,15 @@ export const adminPlugin: FastifyPluginAsync<AdminPluginOptions> = async (fastif
       httpOnly: true,
       sameSite: "strict",
       path: "/admin",
-      secure: process.env.NODE_ENV === "production",
+      secure: isSecureCookieEnvironment(process.env.NODE_ENV),
+      maxAge: SESSION_MAX_AGE_MS,
     },
   });
 
   fastify.post("/admin/login", async (request, reply) => {
     const parsed = loginBodySchema.safeParse(request.body);
     if (!parsed.success) {
+      request.log.warn({ route: "POST /admin/login", reason: "malformed_body" }, "admin login rejected");
       return reply.code(401).send({
         error: { code: "unauthorized", message: "Invalid credentials" },
       });
@@ -77,6 +110,10 @@ export const adminPlugin: FastifyPluginAsync<AdminPluginOptions> = async (fastif
 
     const { username, password } = parsed.data;
     if (username !== options.authConfig.username || password !== options.authConfig.password) {
+      request.log.warn(
+        { route: "POST /admin/login", reason: "invalid_credentials", username },
+        "admin login rejected",
+      );
       return reply.code(401).send({
         error: { code: "unauthorized", message: "Invalid credentials" },
       });
@@ -84,6 +121,19 @@ export const adminPlugin: FastifyPluginAsync<AdminPluginOptions> = async (fastif
 
     request.session.authenticated = true;
     return reply.code(204).send();
+  });
+
+  // Intentionally NOT nested under the `requireAdminSession`-guarded scope
+  // below: that hook 401s any request without an authenticated session,
+  // which would make logout impossible to call idempotently (the whole
+  // point of "log out" on an already-expired/missing/unauthenticated
+  // session is that it still succeeds, mirroring the DELETE-on-missing-
+  // resource idempotency convention rather than erroring). Still runs
+  // through `requireCsrfHeader` directly since it's a state-changing POST.
+  fastify.post("/admin/logout", { preHandler: requireCsrfHeader }, async (request, reply) => {
+    await request.session.destroy();
+    reply.clearCookie(SESSION_COOKIE_NAME, { path: "/admin" });
+    return reply.code(200).send();
   });
 
   await fastify.register(async (admin) => {

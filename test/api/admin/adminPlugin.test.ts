@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import path from "node:path";
 import Fastify from "fastify";
 import Database from "better-sqlite3";
 import { migrate } from "../../../src/db/migrate.js";
-import { adminPlugin } from "../../../src/api/admin/adminPlugin.js";
+import { adminPlugin, isSecureCookieEnvironment } from "../../../src/api/admin/adminPlugin.js";
 import type { AuthConfig } from "../../../src/api/auth/authGuard.js";
 
 const migrationsDir = path.join(process.cwd(), "src", "migrations");
@@ -88,6 +88,70 @@ describe("POST /admin/login", () => {
     expect(response.statusCode).toBe(401);
     expect(setCookieHeader(response)).toBeUndefined();
   });
+
+  it("sets an expiry on the session cookie so it can't live forever", async () => {
+    const server = await buildAdminServer();
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/login",
+      payload: { username: authConfig.username, password: authConfig.password },
+    });
+
+    const cookie = setCookieHeader(response);
+    expect(cookie).toMatch(/Expires=/i);
+  });
+});
+
+describe("session cookie 'secure' attribute", () => {
+  const originalNodeEnv = process.env.NODE_ENV;
+
+  afterEach(() => {
+    if (originalNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
+  async function loginCookie(): Promise<string | undefined> {
+    const server = await buildAdminServer();
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/login",
+      payload: { username: authConfig.username, password: authConfig.password },
+    });
+    return setCookieHeader(response);
+  }
+
+  // These two fail-closed cases are asserted against the pure predicate
+  // rather than a live `.inject()` login: `@fastify/session` silently omits
+  // `Set-Cookie` entirely for a `secure` cookie served over the plain-HTTP
+  // connection `.inject()` simulates, so the cookie header itself can't
+  // distinguish "secure and dropped" from "not secure and present" here.
+  it("fails CLOSED to secure when NODE_ENV is unset", () => {
+    expect(isSecureCookieEnvironment(undefined)).toBe(true);
+  });
+
+  it("fails CLOSED to secure for an unrecognized/misspelled NODE_ENV value", () => {
+    expect(isSecureCookieEnvironment("producton")).toBe(true);
+  });
+
+  it("is not secure when NODE_ENV=development", async () => {
+    process.env.NODE_ENV = "development";
+
+    const cookie = await loginCookie();
+
+    expect(cookie).not.toMatch(/;\s*Secure/i);
+  });
+
+  it("is not secure when NODE_ENV=test", async () => {
+    process.env.NODE_ENV = "test";
+
+    const cookie = await loginCookie();
+
+    expect(cookie).not.toMatch(/;\s*Secure/i);
+  });
 });
 
 describe("/admin/api/* session guard", () => {
@@ -130,5 +194,56 @@ describe("/admin/api/* session guard", () => {
     });
 
     expect(response.statusCode).toBe(401);
+  });
+});
+
+describe("POST /admin/logout", () => {
+  it("invalidates the session so a subsequent authenticated request returns 401", async () => {
+    const server = await buildAdminServer();
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/admin/login",
+      payload: { username: authConfig.username, password: authConfig.password },
+    });
+    const cookie = setCookieHeader(login);
+    expect(cookie).toBeDefined();
+
+    const logout = await server.inject({
+      method: "POST",
+      url: "/admin/logout",
+      headers: { cookie: cookie as string, "x-requested-with": "fetch" },
+    });
+    expect(logout.statusCode).toBe(200);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/admin/api/session",
+      headers: { cookie: cookie as string },
+    });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("is idempotent: returns 200 even without a session cookie", async () => {
+    const server = await buildAdminServer();
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/logout",
+      headers: { "x-requested-with": "fetch" },
+    });
+
+    expect(response.statusCode).toBe(200);
+  });
+
+  it("still requires the CSRF header, like other state-changing admin routes", async () => {
+    const server = await buildAdminServer();
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/logout",
+    });
+
+    expect(response.statusCode).toBe(403);
   });
 });
