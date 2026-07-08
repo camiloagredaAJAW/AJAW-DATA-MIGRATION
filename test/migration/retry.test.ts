@@ -185,6 +185,156 @@ describe("retrySingleRecord", () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
+  it("pushes an AiSearch resultAdded update after a successful retry, with the correct aiSearchId", async () => {
+    const db = freshDb();
+    seedTitleMapping(db, "AR");
+    const run = createRun(db);
+    const checkpoint = upsertCheckpoint(db, run.id, "AR");
+    setAiSearchId(db, checkpoint.id, 999);
+    const error = recordError(db, {
+      runId: run.id,
+      countryCode: "AR",
+      recordOffset: 40,
+      recordIdentifier: "ACME",
+      errorReason: "Axelor rejected: missing required field",
+    });
+
+    const leadsFetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(textResponse(jsonLine({ legal_name: "ACME" })));
+    const axelorFetchImpl = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      if (method === "GET" && url.endsWith(".AiSearch/999")) {
+        return jsonResponse({
+          status: 0,
+          data: [{ id: 999, version: 2, statusSelect: 1, resultsNumber: 5 }],
+        });
+      }
+      if (method === "POST" && url.endsWith(".AiSearch/999")) {
+        return jsonResponse({
+          status: 0,
+          data: [{ id: 999, version: 3, statusSelect: 2, resultsNumber: 6 }],
+        });
+      }
+      return jsonResponse({ status: 0, data: [{ id: 555 }] });
+    });
+
+    const deps: RetrySingleRecordDeps = {
+      db,
+      leadsConfig: leadsConfig(leadsFetchImpl as unknown as typeof fetch),
+      axelorConfig: axelorConfig(),
+      session: fakeSession(),
+      fetchImpl: axelorFetchImpl as unknown as typeof fetch,
+    };
+
+    const result = await retrySingleRecord(deps, error.id);
+
+    expect(result.outcome).toBe("resolved");
+    const postCall = axelorFetchImpl.mock.calls.find(
+      (call: unknown[]) =>
+        (call[1] as RequestInit)?.method === "POST" && (call[0] as string).endsWith(".AiSearch/999"),
+    );
+    expect(postCall).toBeDefined();
+    const [, postInit] = postCall as [string, RequestInit];
+    const sentBody = JSON.parse(postInit.body as string) as {
+      data: { id: number; statusSelect: number; resultsNumber: number };
+    };
+    expect(sentBody.data).toMatchObject({ id: 999, statusSelect: 2, resultsNumber: 6 });
+  });
+
+  it("records a visibility-only import_errors row when the AiSearch progress push fails twice, without changing the resolved outcome", async () => {
+    const db = freshDb();
+    seedTitleMapping(db, "AR");
+    const run = createRun(db);
+    const checkpoint = upsertCheckpoint(db, run.id, "AR");
+    setAiSearchId(db, checkpoint.id, 999);
+    const error = recordError(db, {
+      runId: run.id,
+      countryCode: "AR",
+      recordOffset: 40,
+      recordIdentifier: "ACME",
+      errorReason: "Axelor rejected: missing required field",
+    });
+
+    const leadsFetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(textResponse(jsonLine({ legal_name: "ACME" })));
+    const axelorFetchImpl = vi.fn().mockImplementation(async (url: string) => {
+      // Both the GET and the retried GET inside pushAiSearchUpdate hit this
+      // branch and fail, so the whole push fails twice.
+      if (url.endsWith(".AiSearch/999")) {
+        throw new Error("axelor unreachable");
+      }
+      return jsonResponse({ status: 0, data: [{ id: 555 }] });
+    });
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const deps: RetrySingleRecordDeps = {
+      db,
+      leadsConfig: leadsConfig(leadsFetchImpl as unknown as typeof fetch),
+      axelorConfig: axelorConfig(),
+      session: fakeSession(),
+      fetchImpl: axelorFetchImpl as unknown as typeof fetch,
+    };
+
+    const result = await retrySingleRecord(deps, error.id);
+    errorSpy.mockRestore();
+
+    // The record itself saved successfully, so the retry must still resolve
+    // — the push failure is an additional, non-blocking visibility signal.
+    expect(result.outcome).toBe("resolved");
+    expect(getImportErrorById(db, error.id)?.resolved).toBe(true);
+
+    const visibilityErrors = db
+      .prepare(`SELECT * FROM import_errors WHERE run_id = ? AND record_offset IS NULL`)
+      .all(run.id) as { error_reason: string }[];
+    expect(visibilityErrors).toHaveLength(1);
+    expect(visibilityErrors[0]?.error_reason).toMatch(
+      /AiSearch progress sync failed after a successful retry/,
+    );
+    expect(visibilityErrors[0]?.error_reason).toMatch(/aiSearchId=999/);
+  });
+
+  it("does not push an AiSearch resultAdded update when the retry itself fails", async () => {
+    const db = freshDb();
+    seedTitleMapping(db, "AR");
+    const run = createRun(db);
+    const checkpoint = upsertCheckpoint(db, run.id, "AR");
+    setAiSearchId(db, checkpoint.id, 999);
+    const error = recordError(db, {
+      runId: run.id,
+      countryCode: "AR",
+      recordOffset: 40,
+      recordIdentifier: "ACME",
+      errorReason: "Axelor rejected: missing required field",
+    });
+
+    const leadsFetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(textResponse(jsonLine({ legal_name: "ACME" })));
+    const axelorFetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ status: 1, data: [] }, true, 200));
+
+    const deps: RetrySingleRecordDeps = {
+      db,
+      leadsConfig: leadsConfig(leadsFetchImpl as unknown as typeof fetch),
+      axelorConfig: axelorConfig(),
+      session: fakeSession(),
+      fetchImpl: axelorFetchImpl as unknown as typeof fetch,
+    };
+
+    const result = await retrySingleRecord(deps, error.id);
+
+    expect(result.outcome).toBe("failed");
+    expect(axelorFetchImpl).toHaveBeenCalledTimes(1);
+    const noAiSearchCall = axelorFetchImpl.mock.calls.some((call: unknown[]) =>
+      (call[0] as string).endsWith(".AiSearch/999"),
+    );
+    expect(noAiSearchCall).toBe(false);
+  });
+
   it("creates the AiSearch parent on the spot when the checkpoint has no aiSearchId yet, and persists it", async () => {
     const db = freshDb();
     seedTitleMapping(db, "BO");

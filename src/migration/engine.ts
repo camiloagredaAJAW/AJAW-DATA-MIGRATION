@@ -3,7 +3,13 @@ import type { AxelorConfig } from "../config/env.js";
 import type { LeadsClientConfig } from "../leads/leadsClient.js";
 import { fetchCompaniesPage } from "../leads/leadsClient.js";
 import type { AxelorSessionClient } from "../axelor/sessionClient.js";
-import { createAiSearch, createAiSearchResults } from "../axelor/restClient.js";
+import {
+  createAiSearch,
+  createAiSearchResults,
+  getAiSearch,
+  updateAiSearch,
+  type AiSearchRecord,
+} from "../axelor/restClient.js";
 import { sanitizeRecord } from "../sanitize/sanitize.js";
 import { buildAiSearchResultsPayload } from "./payloadBuilder.js";
 import { listFieldMappings } from "../repos/mappingRepo.js";
@@ -71,6 +77,11 @@ export interface MigrationSummary {
 /** Source table name in the Leads DB — every country now exposes exactly one table. */
 export const SOURCE_TABLE = "companies";
 
+/** `AiSearch.statusSelect` codes, per `AXELOR_INTEGRATION.md`. */
+export const AI_SEARCH_STATUS_IN_PROCESS = 1;
+export const AI_SEARCH_STATUS_COMPLETED = 2;
+export const AI_SEARCH_STATUS_NO_RESULTS = 3;
+
 function getDefaultCountries(db: Database.Database): string[] {
   const rows = db
     .prepare(`SELECT DISTINCT source_db FROM source_catalog ORDER BY source_db`)
@@ -130,6 +141,125 @@ export async function createAiSearchParent(
   );
   setAiSearchId(db, checkpointId, parent.id);
   return parent.id;
+}
+
+/**
+ * Shared GET-then-POST-with-one-retry skeleton behind `pushAiSearchProgress`
+ * and `pushAiSearchResultAdded`: always re-reads the `AiSearch` parent's
+ * current state via `getAiSearch` immediately before writing via
+ * `updateAiSearch` (never a cached/reused `version` — see the callers' doc
+ * comments for why), retries the whole sequence exactly once on any failure,
+ * and swallows a second failure (logging it via `console.error`) rather than
+ * throwing. `computeUpdate` derives the `statusSelect`/`resultsNumber` to
+ * write from the freshly-read current record. Returns `true` on success,
+ * `false` if both attempts failed — callers decide whether/how to surface
+ * that failure (e.g. via `recordError`); this function itself never throws.
+ */
+async function pushAiSearchUpdate(
+  session: AxelorSessionClient,
+  axelorConfig: AxelorConfig,
+  aiSearchId: number,
+  fetchImpl: typeof fetch,
+  computeUpdate: (current: AiSearchRecord) => { statusSelect: number; resultsNumber: number },
+): Promise<boolean> {
+  async function attempt(): Promise<void> {
+    const current = await getAiSearch(session, axelorConfig, aiSearchId, fetchImpl);
+    const { statusSelect, resultsNumber } = computeUpdate(current);
+    await updateAiSearch(
+      session,
+      axelorConfig,
+      { id: aiSearchId, version: current.version, statusSelect, resultsNumber },
+      fetchImpl,
+    );
+  }
+
+  try {
+    await attempt();
+    return true;
+  } catch {
+    try {
+      await attempt();
+      return true;
+    } catch (error) {
+      console.error(
+        `pushAiSearchUpdate: failed to push AiSearch progress for aiSearchId=${aiSearchId} after one retry: ${errorMessage(error)}`,
+      );
+      return false;
+    }
+  }
+}
+
+export interface AiSearchProgressInput {
+  readonly aiSearchId: number;
+  /** Records newly saved since the last push — NOT a cumulative/running total. */
+  readonly delta: number;
+  /** True only for the country's last/exhausting page (source data exhausted). */
+  readonly terminal: boolean;
+}
+
+/**
+ * Pushes the `AiSearch` parent's progress (`statusSelect`/`resultsNumber`) to
+ * Axelor as a DELTA on top of Axelor's own current `resultsNumber` — never an
+ * absolute overwrite. Always re-reads the parent's CURRENT state via
+ * `getAiSearch` immediately before writing — never cache/reuse a version (or
+ * a running total) across calls, because both Axelor's optimistic-lock
+ * `version` AND its `resultsNumber` on this record can be stale/advanced by
+ * the time this runs (a concurrent retry from the Errors page, a prior
+ * attempt of this same push, or a resumed run's in-memory counter starting
+ * back at 0 must never clobber what Axelor already recorded). The new total
+ * written is always `current.resultsNumber + input.delta`. `statusSelect` is
+ * `IN_PROCESS` unless `input.terminal` is true, in which case it becomes
+ * `COMPLETED` (new total > 0) or `NO_RESULTS` (new total is still 0).
+ *
+ * NON-FATAL CONTRACT: this is best-effort progress telemetry on Axelor's
+ * side only. On any failure (from either the GET or the POST), the whole
+ * GET-then-POST sequence is retried exactly once (with a fresh re-read). If
+ * the second attempt also fails, the error is logged via `console.error`
+ * (including `aiSearchId`) and this function returns `false` — it NEVER
+ * throws. It must never block or fail the actual `AiSearchResults` child
+ * writes, which are the real migrated data; callers are responsible for
+ * surfacing a `false` return as a visible (but non-blocking) operator signal.
+ */
+export async function pushAiSearchProgress(
+  session: AxelorSessionClient,
+  axelorConfig: AxelorConfig,
+  input: AiSearchProgressInput,
+  fetchImpl: typeof fetch,
+): Promise<boolean> {
+  return pushAiSearchUpdate(session, axelorConfig, input.aiSearchId, fetchImpl, (current) => {
+    const newTotal = current.resultsNumber + input.delta;
+    return {
+      statusSelect: !input.terminal
+        ? AI_SEARCH_STATUS_IN_PROCESS
+        : newTotal > 0
+          ? AI_SEARCH_STATUS_COMPLETED
+          : AI_SEARCH_STATUS_NO_RESULTS,
+      resultsNumber: newTotal,
+    };
+  });
+}
+
+/**
+ * Pushes a single successful retry's progress to the `AiSearch` parent. Used
+ * only by the single-record retry flow (`retry.ts`). A thin wrapper around
+ * `pushAiSearchProgress` with `delta: 1, terminal: true` — a successful retry
+ * always means exactly one more saved record than Axelor's last recorded
+ * count, and a terminal push whose new total is always `>= 1` always resolves
+ * to `COMPLETED` (a successful retry can never legitimately leave the parent
+ * at `NO_RESULTS` anymore). Kept as a named export because the call site in
+ * `retry.ts` reads more clearly with this name than inlining the input object
+ * there.
+ *
+ * Same non-throwing, `boolean`-returning, best-effort contract as
+ * `pushAiSearchProgress` — see its doc comment for the full rationale.
+ */
+export async function pushAiSearchResultAdded(
+  session: AxelorSessionClient,
+  axelorConfig: AxelorConfig,
+  aiSearchId: number,
+  fetchImpl: typeof fetch,
+): Promise<boolean> {
+  return pushAiSearchProgress(session, axelorConfig, { aiSearchId, delta: 1, terminal: true }, fetchImpl);
 }
 
 interface CountryMigrationContext {
@@ -192,6 +322,7 @@ async function runCountryMigration(ctx: CountryMigrationContext): Promise<Countr
       }
 
       const page = await fetchCompaniesPage(leadsConfig, countryCode, pageLimit, offset);
+      let pagesSavedCount = 0;
 
       for (let index = 0; index < page.length; index += 1) {
         if (controlSignal.state(runId) !== "running") {
@@ -216,6 +347,7 @@ async function runCountryMigration(ctx: CountryMigrationContext): Promise<Countr
           const payload = buildAiSearchResultsPayload(sanitized, mappings, aiSearchId);
           await createAiSearchResults(session, axelorConfig, payload, fetchImpl);
           processedCount += 1;
+          pagesSavedCount += 1;
         } catch (error) {
           failedCount += 1;
           recordError(db, {
@@ -232,9 +364,34 @@ async function runCountryMigration(ctx: CountryMigrationContext): Promise<Countr
         break;
       }
 
+      const isLastPage = page.length < pageLimit;
+      // Skip the push when nothing changed and this isn't the terminal page —
+      // there's nothing new to report, and it saves an Axelor round-trip on
+      // pages where every record failed. The terminal COMPLETED/NO_RESULTS
+      // status must still be pushed even with a zero delta.
+      if (aiSearchId !== null && (pagesSavedCount > 0 || isLastPage)) {
+        const pushSucceeded = await pushAiSearchProgress(
+          session,
+          axelorConfig,
+          { aiSearchId, delta: pagesSavedCount, terminal: isLastPage },
+          fetchImpl,
+        );
+        if (!pushSucceeded) {
+          // Purely a visibility side-effect — must not affect finalStatus,
+          // halted, or the loop's control flow. The migration keeps running.
+          recordError(db, {
+            runId,
+            countryCode,
+            recordOffset: null,
+            recordIdentifier: null,
+            errorReason: `AiSearch progress sync failed for aiSearchId=${aiSearchId}`,
+          });
+        }
+      }
+
       advanceOffset(db, checkpoint.id, offset + page.length);
 
-      if (page.length < pageLimit) {
+      if (isLastPage) {
         setStatus(db, checkpoint.id, "completed");
         finalStatus = "completed";
         break;

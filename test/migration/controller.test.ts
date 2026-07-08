@@ -494,9 +494,26 @@ describe("createMigrationController", () => {
         await leadsGate;
         return textResponse(`{"legal_name":"ACME"}`);
       });
-      const axelorFetchImpl = vi
-        .fn()
-        .mockResolvedValue(jsonResponse({ status: 0, data: [{ id: 555 }] }));
+      // Distinguishes the AiSearchResults create (PUT) from the AiSearch
+      // progress push's GET-then-POST (triggered by `pushAiSearchResultAdded`
+      // after a successful retry) so the call-count assertion below reflects
+      // exactly one of each rather than three indistinguishable calls.
+      const axelorFetchImpl = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        const method = init?.method ?? "GET";
+        if (method === "GET" && url.endsWith(".AiSearch/999")) {
+          return jsonResponse({
+            status: 0,
+            data: [{ id: 999, version: 1, statusSelect: 1, resultsNumber: 0 }],
+          });
+        }
+        if (method === "POST" && url.endsWith(".AiSearch/999")) {
+          return jsonResponse({
+            status: 0,
+            data: [{ id: 999, version: 2, statusSelect: 2, resultsNumber: 1 }],
+          });
+        }
+        return jsonResponse({ status: 0, data: [{ id: 555 }] });
+      });
       const deps: MigrationControllerDeps = {
         db,
         leadsConfig: { ...fakeLeadsConfig(), fetchImpl: leadsFetchImpl as unknown as typeof fetch },
@@ -519,7 +536,10 @@ describe("createMigrationController", () => {
       const firstOutcome = await firstRetry;
 
       expect(firstOutcome.outcome).toBe("resolved");
-      expect(axelorFetchImpl).toHaveBeenCalledTimes(1);
+      // 1 AiSearchResults create (PUT) + 1 AiSearch progress GET + 1 AiSearch
+      // progress POST, from the `pushAiSearchResultAdded` call `retry.ts`
+      // now makes after a successful save.
+      expect(axelorFetchImpl).toHaveBeenCalledTimes(3);
 
       // The lock is released once the in-flight retry settles: a subsequent
       // retry for the same (now-resolved) errorId is no longer blocked by
