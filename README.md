@@ -19,6 +19,8 @@ All four PRD slices are implemented. The migration tool is usable end-to-end: bo
 
 > **`AiSearch` progress sync (2026-07-08).** The migration engine no longer just creates the `AiSearch` parent once and forgets it: `resultsNumber`/`statusSelect` are now pushed back to Axelor once per fetched page/block during a country's run, and once per successful individual retry from the Errors page — not just reflected locally. Progress pushes are best-effort (never fail or block the actual `AiSearchResults` writes); see [`AXELOR_INTEGRATION.md`](./AXELOR_INTEGRATION.md) for the `statusSelect` code table and update contract.
 
+> **Admin UI polish (2026-07-08).** The dashboard now auto-refreshes every 10s (plus a manual Refresh button below "Per-Country Progress"); the Errors table shows each failure's timestamp; `source_catalog` has its own page (`/admin/catalog.html`, `GET /admin/api/catalog`) instead of only a blind refresh button; and "Reset Everything" stays collapsed behind a reveal button (with a Cancel to close it again) instead of sitting open on the dashboard by default.
+
 ## Stack
 
 Node.js + TypeScript, `better-sqlite3` (operational SQLite state — never a copy of lead data), Fastify, Vitest (Strict TDD — tests are written before implementation).
