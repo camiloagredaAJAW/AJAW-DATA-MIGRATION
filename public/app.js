@@ -326,11 +326,17 @@ function initDashboardPage() {
   document.getElementById("resume-button").addEventListener("click", () => runControlAction("resume"));
   document.getElementById("stop-button").addEventListener("click", () => runControlAction("stop"));
   document.getElementById("refresh-catalog-button").addEventListener("click", refreshCatalog);
+  document.getElementById("refresh-dashboard-button").addEventListener("click", loadDashboard);
 
   document.getElementById("reset-password-input").addEventListener("input", updateResetButtonState);
   document.getElementById("reset-everything-button").addEventListener("click", resetEverything);
 
   loadDashboard();
+  // Auto-refresh so the dashboard stays current without a manual reload —
+  // `loadDashboard()` is a read-only GET already called repeatedly elsewhere
+  // in this codebase (e.g. after every control action) with no in-flight
+  // guard, so an occasional overlapping poll here is an accepted pattern.
+  setInterval(loadDashboard, 10000);
 }
 
 // ---------------------------------------------------------------------------
@@ -480,6 +486,30 @@ function computeCorrectedErrorsOffset(offset, rowCount, total, pageSize) {
   return null;
 }
 
+/**
+ * Pure formatting function, extracted so it's unit-testable without a DOM —
+ * mirrors the `computeErrorsPaginationState`/`computeCorrectedErrorsOffset`
+ * pattern above. Converts an ISO 8601 `createdAt` string into a
+ * `YYYY-MM-DD HH:mm:ss` local-time string using the `Date` object's local
+ * getters (not `toLocaleString()`, which is locale-dependent and would make
+ * output/tests fragile across machines). Falls back to returning the input
+ * unchanged for a malformed/unparseable string rather than throwing or
+ * rendering "Invalid Date".
+ */
+function formatErrorTimestamp(isoString) {
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return isoString;
+
+  const pad = (value) => String(value).padStart(2, "0");
+  const year = date.getFullYear();
+  const month = pad(date.getMonth() + 1);
+  const day = pad(date.getDate());
+  const hours = pad(date.getHours());
+  const minutes = pad(date.getMinutes());
+  const seconds = pad(date.getSeconds());
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
+
 function renderErrorsTable(rows) {
   const tbody = document.querySelector("#errors-table tbody");
   tbody.innerHTML = "";
@@ -488,6 +518,7 @@ function renderErrorsTable(rows) {
     row.dataset.id = String(importError.id);
     row.innerHTML = `
       <td>${importError.id}</td>
+      <td>${escapeHtml(formatErrorTimestamp(importError.createdAt))}</td>
       <td>${importError.runId}</td>
       <td>${escapeHtml(importError.countryCode)}</td>
       <td>${importError.recordOffset ?? "-"}</td>
@@ -695,6 +726,7 @@ if (typeof module !== "undefined") {
     formatFullResetResult,
     computeErrorsPaginationState,
     computeCorrectedErrorsOffset,
+    formatErrorTimestamp,
     // `adminFetch` touches only `fetch`/`window.location`, never `document`,
     // so it's testable here without a DOM/jsdom dependency (see
     // test/public/app.test.ts) — used specifically to prove that a 403
