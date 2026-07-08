@@ -269,6 +269,65 @@ Respuesta esperada:
 ```
 
 
+### Sincronización de progreso del `AiSearch` padre
+
+El registro `AiSearch` padre no se crea una única vez y se olvida: mientras avanza la migración de un país, este backend informa a Axelor cuántos registros se guardaron y en qué estado quedó la búsqueda, actualizando `statusSelect` y `resultsNumber` sobre el mismo registro padre.
+
+Tabla de códigos de `statusSelect`:
+
+| Código | Significado |
+|--------|-------------|
+| `1` | `IN_PROCESS` — la búsqueda está en curso (aún no se agotó el origen de datos). |
+| `2` | `COMPLETED` — la búsqueda terminó y guardó al menos un registro. |
+| `3` | `NO_RESULTS` — la búsqueda terminó sin guardar ningún registro. |
+
+Para actualizar el padre, Axelor exige el `version` vigente del registro (bloqueo optimista). Por eso, antes de cada actualización se ejecuta primero un `GET /ws/rest/:model/:id` para leer el `version` actual — nunca se reutiliza un `version` obtenido en una llamada anterior, porque puede haber quedado desactualizado por un push previo o por un retry concurrente desde la pantalla de errores.
+
+Cadencia de estas actualizaciones:
+
+- Una vez por cada página/bloque obtenido del Leads DB durante la migración de un país (al terminar de procesar la página completa, nunca sobre una página interrumpida por pausa/detención).
+- Una vez por cada retry individual exitoso desde la pantalla de errores (`/admin/api/errors/:id/retry` o `/api/migration/errors/:id/retry`), sumando 1 al `resultsNumber` que Axelor tenía registrado y forzando `statusSelect` a `COMPLETED`.
+
+Estas actualizaciones son *best-effort*: si fallan (incluso tras un reintento), el backend registra el error en su log y continúa sin bloquear ni fallar la escritura real de los `AiSearchResults`, que es la migración de datos propiamente dicha.
+
+```bash
+curl --location --request GET 'https://salesai-dev.ajawmrp.com/ws/rest/com.ajawmrp3.apps.prospectingai.db.AiSearch/1' \
+--header 'Authorization: Basic <base64(AXELOR_USERNAME:AXELOR_PASSWORD)>' \
+--header 'Cookie: CSRF-TOKEN=<csrf-token>; JSESSIONID=<session-id>; TENANTID=<tenant-id>'
+```
+
+Respuesta esperada (incluye el `version` vigente):
+
+```json
+{
+    "status": 0,
+    "data": [
+        {
+            "id": 1,
+            "version": 3,
+            "statusSelect": 1,
+            "resultsNumber": 42,
+            "searchString": "aesthetic clinics"
+        }
+    ]
+}
+```
+
+```bash
+curl --location --request POST 'https://salesai-dev.ajawmrp.com/ws/rest/com.ajawmrp3.apps.prospectingai.db.AiSearch/1' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Basic <base64(AXELOR_USERNAME:AXELOR_PASSWORD)>' \
+--header 'Cookie: CSRF-TOKEN=<csrf-token>; JSESSIONID=<session-id>; TENANTID=<tenant-id>' \
+--data '{
+  "data": {
+        "id": 1,
+        "version": 3,
+        "statusSelect": 2,
+        "resultsNumber": 43
+  }
+} '
+```
+
 ### Ejemplo de búsqueda de lead tipo empresa
 
 Para consultar un lead tipo empresa con un nombre específico, el backend deberá ejecutar una petición `search` sobre el modelo `AiSearchResults`.

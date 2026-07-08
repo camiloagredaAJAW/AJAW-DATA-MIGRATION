@@ -11,10 +11,16 @@ import { upsertCheckpoint } from "../db/checkpointRepo.js";
 import {
   getImportErrorById,
   markResolved,
+  recordError,
   updateErrorReason,
   type ImportErrorRow,
 } from "../db/importErrorRepo.js";
-import { SOURCE_TABLE, createAiSearchParent, deriveRecordIdentifier } from "./engine.js";
+import {
+  SOURCE_TABLE,
+  createAiSearchParent,
+  deriveRecordIdentifier,
+  pushAiSearchResultAdded,
+} from "./engine.js";
 
 /** Fixed re-fetch page size for a single-record retry — always exactly one row. */
 const RETRY_FETCH_LIMIT = 1;
@@ -60,8 +66,9 @@ function errorMessage(error: unknown): string {
  * Re-attempts a single failed `import_errors` row: re-fetches the record from
  * the Leads DB at its stored `(country_code, record_offset)` (no raw payload
  * is ever stored, so retry always re-fetches live data — an accepted known
- * limitation), re-runs the sanitize -> payload -> Axelor-create pipeline, and
- * marks the row resolved on success.
+ * limitation), re-runs the sanitize -> payload -> Axelor-create pipeline,
+ * pushes an `AiSearch` progress update (`pushAiSearchResultAdded`) reflecting
+ * the newly-saved record, and marks the row resolved on success.
  *
  * If the re-fetched record's derived identifier differs from the stored
  * `record_identifier`, a warning is logged but the retry still completes
@@ -137,6 +144,19 @@ export async function retrySingleRecord(
     const sanitized = sanitizeRecord(record);
     const payload = buildAiSearchResultsPayload(sanitized, mappings, aiSearchId);
     await createAiSearchResults(session, axelorConfig, payload, fetchImpl);
+    const pushSucceeded = await pushAiSearchResultAdded(session, axelorConfig, aiSearchId, fetchImpl);
+    if (!pushSucceeded) {
+      // Purely a visibility side-effect — the record itself saved
+      // successfully, so this must NOT change the outcome below. It's an
+      // additional signal on top of (not a replacement for) `resolved`.
+      recordError(db, {
+        runId: importError.runId,
+        countryCode: importError.countryCode,
+        recordOffset: null,
+        recordIdentifier: null,
+        errorReason: `AiSearch progress sync failed after a successful retry for aiSearchId=${aiSearchId}`,
+      });
+    }
 
     const resolved = markResolved(db, errorId);
     return { outcome: "resolved", importError: resolved ?? importError };

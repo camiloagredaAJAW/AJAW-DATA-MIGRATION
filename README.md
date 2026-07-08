@@ -17,6 +17,8 @@ All four PRD slices are implemented. The migration tool is usable end-to-end: bo
 
 > **Leads DB source changed (2026-07-06).** The remote source moved from a per-`source_db`/`source_table` model to a single `/companies?country=<CODE>` endpoint iterated over country codes. The Person-lead domain (LinkedinSearch/LinkedinSearchResults) is no longer in scope — see [`PRD.md` §16 Revision History](./PRD.md#16-revision-history) and [`LEADS_DATABASE.md`](./LEADS_DATABASE.md).
 
+> **`AiSearch` progress sync (2026-07-08).** The migration engine no longer just creates the `AiSearch` parent once and forgets it: `resultsNumber`/`statusSelect` are now pushed back to Axelor once per fetched page/block during a country's run, and once per successful individual retry from the Errors page — not just reflected locally. Progress pushes are best-effort (never fail or block the actual `AiSearchResults` writes); see [`AXELOR_INTEGRATION.md`](./AXELOR_INTEGRATION.md) for the `statusSelect` code table and update contract.
+
 ## Stack
 
 Node.js + TypeScript, `better-sqlite3` (operational SQLite state — never a copy of lead data), Fastify, Vitest (Strict TDD — tests are written before implementation).
