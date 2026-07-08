@@ -261,6 +261,23 @@ function updateResetButtonState() {
   button.disabled = passwordInput.value === "";
 }
 
+/**
+ * The danger-zone form (warning text, password input, confirm button) stays
+ * hidden behind a "Reset Everything" reveal button until the operator
+ * explicitly asks for it — collapsing it again clears the typed password so
+ * it never sits exposed in a hidden field. Used both by the reveal/cancel
+ * buttons and to auto-collapse after a successful reset.
+ */
+function setResetFormVisible(visible) {
+  document.getElementById("show-reset-form-button").hidden = visible;
+  document.getElementById("reset-form").hidden = !visible;
+  if (!visible) {
+    document.getElementById("reset-password-input").value = "";
+    document.getElementById("reset-everything-result").textContent = "";
+    updateResetButtonState();
+  }
+}
+
 async function resetEverything() {
   const passwordInput = document.getElementById("reset-password-input");
   const button = document.getElementById("reset-everything-button");
@@ -328,6 +345,8 @@ function initDashboardPage() {
   document.getElementById("refresh-catalog-button").addEventListener("click", refreshCatalog);
   document.getElementById("refresh-dashboard-button").addEventListener("click", loadDashboard);
 
+  document.getElementById("show-reset-form-button").addEventListener("click", () => setResetFormVisible(true));
+  document.getElementById("cancel-reset-button").addEventListener("click", () => setResetFormVisible(false));
   document.getElementById("reset-password-input").addEventListener("input", updateResetButtonState);
   document.getElementById("reset-everything-button").addEventListener("click", resetEverything);
 

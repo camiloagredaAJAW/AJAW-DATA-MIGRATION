@@ -19,10 +19,7 @@
 
   <main>
     <h1>Migration Status</h1>
-    <p class="muted">
-      Axelor target: <code id="axelor-target">loading...</code>
-      <button id="refresh-dashboard-button">Refresh</button>
-    </p>
+    <p class="muted">Axelor target: <code id="axelor-target">loading...</code></p>
     <p id="dashboard-error" class="error-banner" hidden></p>
 
     <section id="run-summary">
@@ -52,27 +49,31 @@
 
     <section class="danger-zone">
       <h2>Reset Everything</h2>
-      <p class="muted">
-        Wipes <strong>every</strong> migration run, checkpoint, and import
-        error, plus the field mapping and source catalog tables — then
-        immediately re-seeds field mappings from the committed dataset and
-        refreshes the source catalog from the live Leads DB, in this same
-        action. You do <strong>not</strong> need to click
-        "Refresh Catalog" afterward. This is irreversible: there is no undo
-        and no backup. Any field mappings you have edited on the Field
-        Mappings page are <strong>replaced</strong>, not merged — your edits
-        will be lost along with everything else.
-      </p>
-      <div class="controls-row">
-        <input
-          type="password"
-          id="reset-password-input"
-          placeholder="Re-enter your admin password to confirm"
-          autocomplete="off"
-        />
-        <button id="reset-everything-button" class="danger" disabled>Reset Everything</button>
+      <button id="show-reset-form-button" class="danger">Reset Everything</button>
+      <div id="reset-form" hidden>
+        <p class="muted">
+          Wipes <strong>every</strong> migration run, checkpoint, and import
+          error, plus the field mapping and source catalog tables — then
+          immediately re-seeds field mappings from the committed dataset and
+          refreshes the source catalog from the live Leads DB, in this same
+          action. You do <strong>not</strong> need to click
+          "Refresh Catalog" afterward. This is irreversible: there is no undo
+          and no backup. Any field mappings you have edited on the Field
+          Mappings page are <strong>replaced</strong>, not merged — your edits
+          will be lost along with everything else.
+        </p>
+        <div class="controls-row">
+          <input
+            type="password"
+            id="reset-password-input"
+            placeholder="Re-enter your admin password to confirm"
+            autocomplete="off"
+          />
+          <button id="reset-everything-button" class="danger" disabled>Reset Everything</button>
+          <button id="cancel-reset-button">Cancel</button>
+        </div>
+        <span id="reset-everything-result" class="muted"></span>
       </div>
-      <span id="reset-everything-result" class="muted"></span>
     </section>
 
     <h2>Per-Country Progress</h2>
@@ -91,6 +92,7 @@
       Last offset is the resume checkpoint per country, not a processed/total
       ratio — the source has no total-record count.
     </p>
+    <button id="refresh-dashboard-button">Refresh</button>
   </main>
 
   <script src="/admin/app.js"></script>
