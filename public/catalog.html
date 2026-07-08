@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Field Mappings — Ajaw Data Migration Admin</title>
+  <title>Source Catalog — Ajaw Data Migration Admin</title>
   <link rel="stylesheet" href="/admin/style.css" />
 </head>
-<body data-page="mappings">
+<body data-page="catalog">
   <header class="app-header">
     <nav>
       <a href="/admin/dashboard.html">Dashboard</a>
@@ -18,26 +18,22 @@
   </header>
 
   <main>
-    <h1>Field Mappings</h1>
-    <p id="mappings-error" class="error-banner" hidden></p>
+    <h1>Source Catalog</h1>
+    <p id="catalog-error" class="error-banner" hidden></p>
 
-    <div class="filters-row">
-      <input type="text" id="filter-source-db" placeholder="source_db" />
-      <input type="text" id="filter-source-table" placeholder="source_table" />
-      <button id="filter-button">Filter</button>
-      <button id="clear-filter-button">Clear</button>
+    <div class="controls-row">
+      <button id="refresh-catalog-button">Refresh Catalog</button>
+      <span id="refresh-catalog-result" class="muted"></span>
     </div>
 
-    <table id="mappings-table">
+    <table id="catalog-table">
       <thead>
         <tr>
           <th>Source DB</th>
           <th>Source Table</th>
-          <th>Source Column</th>
-          <th>Destination Field</th>
-          <th>Transform</th>
-          <th>Origin</th>
-          <th></th>
+          <th>Country Code</th>
+          <th>Last Sampled At</th>
+          <th>Sampled Row Count</th>
         </tr>
       </thead>
       <tbody></tbody>

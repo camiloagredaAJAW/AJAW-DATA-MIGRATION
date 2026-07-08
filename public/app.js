@@ -489,14 +489,16 @@ function computeCorrectedErrorsOffset(offset, rowCount, total, pageSize) {
 /**
  * Pure formatting function, extracted so it's unit-testable without a DOM —
  * mirrors the `computeErrorsPaginationState`/`computeCorrectedErrorsOffset`
- * pattern above. Converts an ISO 8601 `createdAt` string into a
+ * pattern above. Converts an ISO 8601 timestamp string into a
  * `YYYY-MM-DD HH:mm:ss` local-time string using the `Date` object's local
  * getters (not `toLocaleString()`, which is locale-dependent and would make
  * output/tests fragile across machines). Falls back to returning the input
  * unchanged for a malformed/unparseable string rather than throwing or
- * rendering "Invalid Date".
+ * rendering "Invalid Date". Generic (not error-specific) — shared by the
+ * errors table's `createdAt` column and the catalog table's `lastSampledAt`
+ * column.
  */
-function formatErrorTimestamp(isoString) {
+function formatTimestamp(isoString) {
   const date = new Date(isoString);
   if (Number.isNaN(date.getTime())) return isoString;
 
@@ -518,7 +520,7 @@ function renderErrorsTable(rows) {
     row.dataset.id = String(importError.id);
     row.innerHTML = `
       <td>${importError.id}</td>
-      <td>${escapeHtml(formatErrorTimestamp(importError.createdAt))}</td>
+      <td>${escapeHtml(formatTimestamp(importError.createdAt))}</td>
       <td>${importError.runId}</td>
       <td>${escapeHtml(importError.countryCode)}</td>
       <td>${importError.recordOffset ?? "-"}</td>
@@ -687,6 +689,53 @@ function initErrorsPage() {
 }
 
 // ---------------------------------------------------------------------------
+// Source catalog
+// ---------------------------------------------------------------------------
+
+function renderCatalogTable(rows) {
+  const tbody = document.querySelector("#catalog-table tbody");
+  tbody.innerHTML = "";
+  for (const entry of rows) {
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td>${escapeHtml(entry.sourceDb)}</td>
+      <td>${escapeHtml(entry.sourceTable)}</td>
+      <td>${escapeHtml(entry.countryCode ?? "-")}</td>
+      <td>${entry.lastSampledAt === null ? "-" : escapeHtml(formatTimestamp(entry.lastSampledAt))}</td>
+      <td>${entry.sampledRowCount ?? "-"}</td>
+    `;
+    tbody.appendChild(row);
+  }
+}
+
+async function loadCatalog() {
+  const errorEl = document.getElementById("catalog-error");
+  hideError(errorEl);
+  try {
+    const { ok, body } = await adminFetchJson("/admin/api/catalog");
+    if (!ok) {
+      showError(errorEl, "Failed to load the source catalog.");
+      return;
+    }
+    renderCatalogTable(body.data);
+  } catch (error) {
+    if (error.message !== "unauthenticated") {
+      console.error(error);
+      showError(errorEl, "Could not reach the server.");
+    }
+  }
+}
+
+function initCatalogPage() {
+  document.getElementById("refresh-catalog-button").addEventListener("click", async () => {
+    await refreshCatalog();
+    await loadCatalog();
+  });
+
+  loadCatalog();
+}
+
+// ---------------------------------------------------------------------------
 // Page dispatch
 // ---------------------------------------------------------------------------
 
@@ -696,6 +745,7 @@ function init() {
   if (page === "dashboard") initDashboardPage();
   else if (page === "mappings") initMappingsPage();
   else if (page === "errors") initErrorsPage();
+  else if (page === "catalog") initCatalogPage();
 }
 
 // Guarded on `typeof document !== "undefined"` so this file can also be
@@ -726,7 +776,7 @@ if (typeof module !== "undefined") {
     formatFullResetResult,
     computeErrorsPaginationState,
     computeCorrectedErrorsOffset,
-    formatErrorTimestamp,
+    formatTimestamp,
     // `adminFetch` touches only `fetch`/`window.location`, never `document`,
     // so it's testable here without a DOM/jsdom dependency (see
     // test/public/app.test.ts) — used specifically to prove that a 403

@@ -19,7 +19,7 @@ const {
   formatFullResetResult,
   computeErrorsPaginationState,
   computeCorrectedErrorsOffset,
-  formatErrorTimestamp,
+  formatTimestamp,
   adminFetch,
 } = require(appJsPath) as {
   escapeHtml: (value: unknown) => string;
@@ -46,7 +46,7 @@ const {
     total: number,
     pageSize: number,
   ) => number | null;
-  formatErrorTimestamp: (isoString: string) => string;
+  formatTimestamp: (isoString: string) => string;
   adminFetch: (path: string, options?: Record<string, unknown>) => Promise<Response>;
 };
 
@@ -308,7 +308,7 @@ describe("computeCorrectedErrorsOffset", () => {
   });
 });
 
-describe("formatErrorTimestamp", () => {
+describe("formatTimestamp", () => {
   it("formats a valid ISO timestamp as YYYY-MM-DD HH:mm:ss in local time", () => {
     const isoString = "2026-07-08T14:30:05.000Z";
     // Build the expected string the SAME way the function does — via local
@@ -318,10 +318,10 @@ describe("formatErrorTimestamp", () => {
     const pad = (value: number) => String(value).padStart(2, "0");
     const expected = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 
-    expect(formatErrorTimestamp(isoString)).toBe(expected);
+    expect(formatTimestamp(isoString)).toBe(expected);
   });
 
   it("returns the original string unchanged for a malformed/unparseable input", () => {
-    expect(formatErrorTimestamp("not-a-date")).toBe("not-a-date");
+    expect(formatTimestamp("not-a-date")).toBe("not-a-date");
   });
 });

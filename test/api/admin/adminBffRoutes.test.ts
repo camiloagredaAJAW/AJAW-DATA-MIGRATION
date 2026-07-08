@@ -334,6 +334,44 @@ describe("/admin/api/field-mappings", () => {
   });
 });
 
+describe("GET /admin/api/catalog", () => {
+  it("lists source_catalog rows ordered by source_db", async () => {
+    const db = freshDb();
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO source_catalog (source_db, source_table, country_code, last_sampled_at, sampled_row_count)
+       VALUES ('cl', 'companies', 'cl', ?, 10)`,
+    ).run(now);
+    db.prepare(
+      `INSERT INTO source_catalog (source_db, source_table, country_code, last_sampled_at, sampled_row_count)
+       VALUES ('ar', 'companies', NULL, NULL, NULL)`,
+    ).run();
+    const server = buildServer({ db, authConfig });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/admin/api/catalog",
+      headers: adminGetHeaders(cookie),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json().data;
+    expect(body).toHaveLength(2);
+    expect(body.map((row: { sourceDb: string }) => row.sourceDb)).toEqual(["ar", "cl"]);
+    expect(body[0].countryCode).toBeNull();
+  });
+
+  it("rejects requests without an authenticated session", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig });
+
+    const response = await server.inject({ method: "GET", url: "/admin/api/catalog" });
+
+    expect(response.statusCode).toBe(401);
+  });
+});
+
 describe("GET /admin/api/errors", () => {
   it("lists import_errors filtered by runId/countryCode/resolved", async () => {
     const db = freshDb();

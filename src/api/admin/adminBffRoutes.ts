@@ -6,6 +6,7 @@ import {
   getFieldMappingById,
   listFieldMappings,
 } from "../../repos/mappingRepo.js";
+import { listSourceCatalog } from "../../db/catalogRepo.js";
 import type { MigrationController } from "../../migration/controller.js";
 
 const listQuerySchema = z.object({
@@ -125,6 +126,10 @@ export function registerAdminBffRoutes(
       return reply.code(404).send(notFoundError("field_mapping not found"));
     }
     return reply.send({ data: updated });
+  });
+
+  fastify.get("/admin/api/catalog", async (_request, reply) => {
+    return reply.send({ data: listSourceCatalog(db) });
   });
 
   // Status/errors/migration-control routes need the shared controller, which
