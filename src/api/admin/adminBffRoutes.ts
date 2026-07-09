@@ -33,6 +33,10 @@ const errorsQuerySchema = z.object({
   offset: z.coerce.number().int().nonnegative().optional(),
 });
 
+const errorAnalyticsQuerySchema = z.object({
+  day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "day must be YYYY-MM-DD").optional(),
+});
+
 const errorIdParamSchema = z.object({
   id: z.coerce.number().int().positive(),
 });
@@ -170,8 +174,13 @@ export function registerAdminBffRoutes(
     return reply.send({ data: rows, total });
   });
 
-  fastify.get("/admin/api/errors/analytics", async (_request, reply) => {
-    return reply.send({ data: controller.getErrorAnalytics() });
+  fastify.get("/admin/api/errors/analytics", async (request, reply) => {
+    const parsedQuery = errorAnalyticsQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return reply.code(400).send(validationError(parsedQuery.error.message));
+    }
+
+    return reply.send({ data: controller.getErrorAnalytics(parsedQuery.data.day) });
   });
 
   fastify.post("/admin/api/errors/:id/retry", async (request, reply) => {

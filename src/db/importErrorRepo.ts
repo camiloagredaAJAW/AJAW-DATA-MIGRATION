@@ -203,25 +203,60 @@ export interface ErrorAnalyticsBucket {
 }
 
 /**
- * Whole-table breakdown of import_errors by UTC day+hour bucket — unlike
+ * Breakdown of import_errors by UTC day+hour bucket — unlike
  * `listImportErrors`/`countImportErrors`, this ignores runId/countryCode/
  * resolved filters entirely, since it answers "when do errors happen"
- * rather than "how many in the current filtered view". Ordered most-recent
- * bucket first (day DESC, hour DESC). `percentage` is computed in JS (not
- * SQL) to avoid floating-point drift, rounded to 1 decimal place.
+ * rather than "how many in the current filtered view". `percentage` is
+ * computed in JS (not SQL) to avoid floating-point drift, rounded to 1
+ * decimal place.
+ *
+ * Two modes, selected by whether `day` is passed:
+ * - `day` omitted: whole-table view, grouped by day+hour, ordered most-recent
+ *   bucket first (day DESC, hour DESC), `percentage` relative to the
+ *   whole-table total. This is the original, backward-compatible behavior.
+ * - `day` given (`"YYYY-MM-DD"`, UTC): scoped to that single day, grouped by
+ *   hour only (every returned bucket's `day` field is just the requested
+ *   day), ordered hour DESC, `percentage` relative to THAT DAY's own total —
+ *   not the whole table's.
  */
-export function getErrorAnalytics(db: Database.Database): ErrorAnalyticsBucket[] {
+export function getErrorAnalytics(db: Database.Database, day?: string): ErrorAnalyticsBucket[] {
+  if (day === undefined) {
+    const rows = db
+      .prepare(`
+        SELECT
+          strftime('%Y-%m-%d', created_at) AS day,
+          strftime('%H', created_at) AS hour,
+          COUNT(*) AS count
+        FROM import_errors
+        GROUP BY day, hour
+        ORDER BY day DESC, hour DESC
+      `)
+      .all() as { day: string; hour: string; count: number }[];
+
+    const total = rows.reduce((sum, row) => sum + row.count, 0);
+    if (total === 0) {
+      return [];
+    }
+
+    return rows.map((row) => ({
+      day: row.day,
+      hour: row.hour,
+      count: row.count,
+      percentage: Math.round((row.count / total) * 100 * 10) / 10,
+    }));
+  }
+
   const rows = db
     .prepare(`
       SELECT
-        strftime('%Y-%m-%d', created_at) AS day,
         strftime('%H', created_at) AS hour,
         COUNT(*) AS count
       FROM import_errors
-      GROUP BY day, hour
-      ORDER BY day DESC, hour DESC
+      WHERE strftime('%Y-%m-%d', created_at) = ?
+      GROUP BY hour
+      ORDER BY hour DESC
     `)
-    .all() as { day: string; hour: string; count: number }[];
+    .all(day) as { hour: string; count: number }[];
 
   const total = rows.reduce((sum, row) => sum + row.count, 0);
   if (total === 0) {
@@ -229,7 +264,7 @@ export function getErrorAnalytics(db: Database.Database): ErrorAnalyticsBucket[]
   }
 
   return rows.map((row) => ({
-    day: row.day,
+    day,
     hour: row.hour,
     count: row.count,
     percentage: Math.round((row.count / total) * 100 * 10) / 10,

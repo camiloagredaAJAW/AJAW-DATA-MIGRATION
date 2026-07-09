@@ -125,8 +125,13 @@ export interface MigrationController {
   stop(): ControlActionOutcome;
   status(): MigrationStatusPayload;
   listErrors(filter: ImportErrorFilter): ListErrorsResult;
-  /** Whole-table (unfiltered) error breakdown by UTC day+hour — see `getErrorAnalytics` in importErrorRepo.ts. */
-  getErrorAnalytics(): ErrorAnalyticsBucket[];
+  /**
+   * Error breakdown by UTC day+hour. With no `day`, whole-table (unfiltered)
+   * and percentage-of-whole-table. With `day` ("YYYY-MM-DD", UTC), scoped to
+   * that single day and percentage-of-that-day's-total. See
+   * `getErrorAnalytics` in importErrorRepo.ts.
+   */
+  getErrorAnalytics(day?: string): ErrorAnalyticsBucket[];
   /**
    * Rejects with `{ outcome: "retry_in_progress" }` when a retry for the
    * same `errorId` is already in flight (see `inFlightRetries` in the
@@ -381,8 +386,8 @@ export function createMigrationController(
       };
     },
 
-    getErrorAnalytics(): ErrorAnalyticsBucket[] {
-      return getErrorAnalyticsFromRepo(db);
+    getErrorAnalytics(day?: string): ErrorAnalyticsBucket[] {
+      return getErrorAnalyticsFromRepo(db, day);
     },
 
     async retry(errorId: number): Promise<RetryOutcome> {

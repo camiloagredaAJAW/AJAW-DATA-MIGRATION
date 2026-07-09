@@ -548,6 +548,102 @@ describe("GET /admin/api/errors/analytics", () => {
 
     expect(response.statusCode).toBe(401);
   });
+
+  it("forwards ?day to the controller, scoping the result and its percentage to that day", async () => {
+    const db = freshDb();
+    const run = createRun(db);
+    const targetDay = recordError(db, {
+      runId: run.id,
+      countryCode: "ar",
+      recordOffset: 1,
+      recordIdentifier: null,
+      errorReason: "boom-target",
+    });
+    const otherDay1 = recordError(db, {
+      runId: run.id,
+      countryCode: "cl",
+      recordOffset: 2,
+      recordIdentifier: null,
+      errorReason: "boom-other-1",
+    });
+    const otherDay2 = recordError(db, {
+      runId: run.id,
+      countryCode: "cl",
+      recordOffset: 3,
+      recordIdentifier: null,
+      errorReason: "boom-other-2",
+    });
+    db.prepare(`UPDATE import_errors SET created_at = ? WHERE id = ?`).run(
+      "2026-07-08T09:00:00.000Z",
+      targetDay.id,
+    );
+    db.prepare(`UPDATE import_errors SET created_at = ? WHERE id = ?`).run(
+      "2026-07-09T01:00:00.000Z",
+      otherDay1.id,
+    );
+    db.prepare(`UPDATE import_errors SET created_at = ? WHERE id = ?`).run(
+      "2026-07-09T02:00:00.000Z",
+      otherDay2.id,
+    );
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/admin/api/errors/analytics?day=2026-07-08",
+      headers: adminGetHeaders(cookie),
+    });
+
+    expect(response.statusCode).toBe(200);
+    // If percentage were still computed against the whole table (3 rows
+    // across both days), this would read 33.3% instead of 100%.
+    expect(response.json()).toEqual({
+      data: [{ day: "2026-07-08", hour: "09", count: 1, percentage: 100 }],
+    });
+  });
+
+  it("returns 400 for an invalid ?day format", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/admin/api/errors/analytics?day=not-a-date",
+      headers: adminGetHeaders(cookie),
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("still works when ?day is omitted (backward compatible whole-table view)", async () => {
+    const db = freshDb();
+    const run = createRun(db);
+    const error = recordError(db, {
+      runId: run.id,
+      countryCode: "ar",
+      recordOffset: 1,
+      recordIdentifier: null,
+      errorReason: "boom",
+    });
+    db.prepare(`UPDATE import_errors SET created_at = ? WHERE id = ?`).run(
+      "2026-07-08T09:00:00.000Z",
+      error.id,
+    );
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/admin/api/errors/analytics",
+      headers: adminGetHeaders(cookie),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      data: [{ day: "2026-07-08", hour: "09", count: 1, percentage: 100 }],
+    });
+  });
 });
 
 describe("POST /admin/api/errors/:id/retry", () => {

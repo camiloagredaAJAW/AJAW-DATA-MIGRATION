@@ -64,14 +64,17 @@
     </div>
 
     <h2>Error Analytics</h2>
-    <p class="muted">Error counts by day and hour (UTC), and what share of all logged errors each bucket represents. This is a whole-table view, independent of the filters above.</p>
+    <p class="muted">Error counts by hour for the selected day (UTC), and each hour's share of that day's total errors.</p>
+    <div class="controls-row">
+      <label for="analytics-day-filter">Day:</label>
+      <input type="date" id="analytics-day-filter" />
+    </div>
     <table id="analytics-table">
       <thead>
         <tr>
-          <th>Day</th>
           <th>Hour</th>
           <th>Count</th>
-          <th>% of Total</th>
+          <th>% of Day Total</th>
         </tr>
       </thead>
       <tbody></tbody>

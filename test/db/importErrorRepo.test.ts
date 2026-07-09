@@ -523,4 +523,145 @@ describe("getErrorAnalytics", () => {
     const totalPercentage = buckets.reduce((sum, bucket) => sum + bucket.percentage, 0);
     expect(totalPercentage).toBeCloseTo(100, 5);
   });
+
+  it("filters to the requested day, grouping by hour only and ordering hour DESC", () => {
+    const db = freshDb();
+    const run = createRun(db);
+    const a = recordError(db, {
+      runId: run.id,
+      countryCode: "ar",
+      recordOffset: 1,
+      recordIdentifier: null,
+      errorReason: "boom-a",
+    });
+    const b = recordError(db, {
+      runId: run.id,
+      countryCode: "ar",
+      recordOffset: 2,
+      recordIdentifier: null,
+      errorReason: "boom-b",
+    });
+    const c = recordError(db, {
+      runId: run.id,
+      countryCode: "ar",
+      recordOffset: 3,
+      recordIdentifier: null,
+      errorReason: "boom-c",
+    });
+    setCreatedAt(db, a.id, "2026-07-08T09:10:00.000Z");
+    setCreatedAt(db, b.id, "2026-07-08T09:40:00.000Z");
+    setCreatedAt(db, c.id, "2026-07-08T14:00:00.000Z");
+
+    const buckets = getErrorAnalytics(db, "2026-07-08");
+
+    expect(buckets).toEqual([
+      { day: "2026-07-08", hour: "14", count: 1, percentage: 33.3 },
+      { day: "2026-07-08", hour: "09", count: 2, percentage: 66.7 },
+    ]);
+  });
+
+  it("scopes percentage to the requested day's own total, decoupled from a different day's much larger total", () => {
+    const db = freshDb();
+    const run = createRun(db);
+    const targetDay = recordError(db, {
+      runId: run.id,
+      countryCode: "ar",
+      recordOffset: 1,
+      recordIdentifier: null,
+      errorReason: "boom-target",
+    });
+    const otherDay1 = recordError(db, {
+      runId: run.id,
+      countryCode: "cl",
+      recordOffset: 2,
+      recordIdentifier: null,
+      errorReason: "boom-other-1",
+    });
+    const otherDay2 = recordError(db, {
+      runId: run.id,
+      countryCode: "cl",
+      recordOffset: 3,
+      recordIdentifier: null,
+      errorReason: "boom-other-2",
+    });
+    const otherDay3 = recordError(db, {
+      runId: run.id,
+      countryCode: "cl",
+      recordOffset: 4,
+      recordIdentifier: null,
+      errorReason: "boom-other-3",
+    });
+    setCreatedAt(db, targetDay.id, "2026-07-08T09:00:00.000Z");
+    setCreatedAt(db, otherDay1.id, "2026-07-09T01:00:00.000Z");
+    setCreatedAt(db, otherDay2.id, "2026-07-09T02:00:00.000Z");
+    setCreatedAt(db, otherDay3.id, "2026-07-09T03:00:00.000Z");
+
+    // If percentage were still computed against the whole table (4 rows),
+    // this would read 25% instead of 100% — that's exactly the bug this
+    // feature fixes.
+    const buckets = getErrorAnalytics(db, "2026-07-08");
+
+    expect(buckets).toEqual([{ day: "2026-07-08", hour: "09", count: 1, percentage: 100 }]);
+  });
+
+  it("returns an empty array for a day with zero errors, even when other days have errors", () => {
+    const db = freshDb();
+    const run = createRun(db);
+    const other = recordError(db, {
+      runId: run.id,
+      countryCode: "ar",
+      recordOffset: 1,
+      recordIdentifier: null,
+      errorReason: "boom",
+    });
+    setCreatedAt(db, other.id, "2026-07-08T09:00:00.000Z");
+
+    expect(getErrorAnalytics(db, "2026-07-09")).toEqual([]);
+  });
+
+  it("returns an empty array for a day string that is shaped like YYYY-MM-DD but isn't a real calendar date, rather than throwing", () => {
+    // The route layer only validates the shape (/^\d{4}-\d{2}-\d{2}$/), not
+    // that it's a real date — strftime comparison just never matches, so a
+    // garbage-but-shaped day degrades to an empty result, not an error.
+    const db = freshDb();
+    const run = createRun(db);
+    const row = recordError(db, {
+      runId: run.id,
+      countryCode: "ar",
+      recordOffset: 1,
+      recordIdentifier: null,
+      errorReason: "boom",
+    });
+    setCreatedAt(db, row.id, "2026-07-08T09:00:00.000Z");
+
+    expect(getErrorAnalytics(db, "2026-13-99")).toEqual([]);
+  });
+
+  it("leaves whole-table semantics unchanged when called with no day argument", () => {
+    const db = freshDb();
+    const run = createRun(db);
+    const first = recordError(db, {
+      runId: run.id,
+      countryCode: "ar",
+      recordOffset: 1,
+      recordIdentifier: null,
+      errorReason: "boom-1",
+    });
+    const second = recordError(db, {
+      runId: run.id,
+      countryCode: "cl",
+      recordOffset: 2,
+      recordIdentifier: null,
+      errorReason: "boom-2",
+    });
+    setCreatedAt(db, first.id, "2026-07-08T09:00:00.000Z");
+    setCreatedAt(db, second.id, "2026-07-09T09:00:00.000Z");
+
+    const buckets = getErrorAnalytics(db);
+
+    expect(buckets).toEqual([
+      { day: "2026-07-09", hour: "09", count: 1, percentage: 50 },
+      { day: "2026-07-08", hour: "09", count: 1, percentage: 50 },
+    ]);
+  });
 });

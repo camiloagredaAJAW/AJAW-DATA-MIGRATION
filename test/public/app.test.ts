@@ -26,6 +26,7 @@ const {
   computeLastPageOffset,
   formatTimestamp,
   formatAnalyticsPercentage,
+  getTodayUtcDateString,
   adminFetch,
 } = require(appJsPath) as {
   escapeHtml: (value: unknown) => string;
@@ -67,6 +68,7 @@ const {
   computeLastPageOffset: (total: number, pageSize: number) => number;
   formatTimestamp: (isoString: string) => string;
   formatAnalyticsPercentage: (percentage: number) => string;
+  getTodayUtcDateString: () => string;
   adminFetch: (path: string, options?: Record<string, unknown>) => Promise<Response>;
 };
 
@@ -483,5 +485,32 @@ describe("formatAnalyticsPercentage", () => {
 
   it("formats a zero percentage", () => {
     expect(formatAnalyticsPercentage(0)).toBe("0.0%");
+  });
+});
+
+describe("getTodayUtcDateString", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("returns the current date in UTC as YYYY-MM-DD", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T23:45:00.000Z"));
+
+    expect(getTodayUtcDateString()).toBe("2026-07-09");
+  });
+
+  it("uses the UTC date rather than the local date near a UTC day boundary", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:15:00.000Z"));
+
+    expect(getTodayUtcDateString()).toBe("2026-01-01");
+  });
+
+  it("zero-pads single-digit month and day values", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-05T12:00:00.000Z"));
+
+    expect(getTodayUtcDateString()).toBe("2026-03-05");
   });
 });

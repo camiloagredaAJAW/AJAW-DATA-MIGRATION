@@ -526,6 +526,38 @@ describe("createMigrationController", () => {
       expect(buckets[0]?.count).toBe(1);
       expect(buckets[0]?.percentage).toBe(100);
     });
+
+    it("passes a day argument through to the repo function, scoping the result to that day", () => {
+      const db = freshDb();
+      const run = createRun(db);
+      const first = recordError(db, {
+        runId: run.id,
+        countryCode: "ar",
+        recordOffset: 10,
+        recordIdentifier: "ACME",
+        errorReason: "boom",
+      });
+      const second = recordError(db, {
+        runId: run.id,
+        countryCode: "ar",
+        recordOffset: 11,
+        recordIdentifier: "ACME2",
+        errorReason: "boom-2",
+      });
+      db.prepare(`UPDATE import_errors SET created_at = ? WHERE id = ?`).run(
+        "2026-07-08T09:00:00.000Z",
+        first.id,
+      );
+      db.prepare(`UPDATE import_errors SET created_at = ? WHERE id = ?`).run(
+        "2026-07-09T09:00:00.000Z",
+        second.id,
+      );
+      const controller = createMigrationController(db, fakeDeps(db));
+
+      const buckets = controller.getErrorAnalytics("2026-07-08");
+
+      expect(buckets).toEqual([{ day: "2026-07-08", hour: "09", count: 1, percentage: 100 }]);
+    });
   });
 
   describe("refreshCatalog", () => {

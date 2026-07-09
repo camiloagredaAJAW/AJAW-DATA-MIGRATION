@@ -803,7 +803,6 @@ function renderAnalyticsTable(rows) {
   for (const bucket of rows) {
     const row = document.createElement("tr");
     row.innerHTML = `
-      <td>${escapeHtml(bucket.day)}</td>
       <td>${escapeHtml(bucket.hour)}</td>
       <td>${bucket.count}</td>
       <td>${formatAnalyticsPercentage(bucket.percentage)}</td>
@@ -813,14 +812,26 @@ function renderAnalyticsTable(rows) {
 }
 
 /**
- * Whole-table view (see `errors.html`'s Error Analytics section), so unlike
- * `loadErrors()` it takes no filter/pagination params and never re-runs on
- * Filter/Clear/Prev/Next/First/Last.
+ * Pure UTC-date formatter for the analytics day picker's default value —
+ * deliberately not `toISOString().slice(0, 10)` so tests can control "now"
+ * deterministically via `vi.setSystemTime` (see test/public/app.test.ts),
+ * mirroring `formatTimestamp`'s manual-getter pattern above.
  */
-async function loadAnalytics() {
+function getTodayUtcDateString() {
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${now.getUTCFullYear()}-${pad(now.getUTCMonth() + 1)}-${pad(now.getUTCDate())}`;
+}
+
+/**
+ * Single-day view (see `errors.html`'s Error Analytics section) — each
+ * bucket's percentage is scoped to `day`'s own total, not the whole table's
+ * (see `getErrorAnalytics` in importErrorRepo.ts), so `day` is required.
+ */
+async function loadAnalytics(day) {
   const errorEl = document.getElementById("errors-error");
   try {
-    const { ok, body } = await adminFetchJson("/admin/api/errors/analytics");
+    const { ok, body } = await adminFetchJson(`/admin/api/errors/analytics?day=${encodeURIComponent(day)}`);
     if (!ok) {
       showError(errorEl, "Failed to load error analytics.");
       return;
@@ -893,7 +904,7 @@ async function bulkRetryErrors() {
     resultEl.textContent = formatBulkRetrySummary(body.data);
     errorsOffset = 0;
     await loadErrors();
-    await loadAnalytics();
+    await loadAnalytics(document.getElementById("analytics-day-filter").value);
   } catch (error) {
     if (error.message !== "unauthenticated") {
       console.error(error);
@@ -939,8 +950,18 @@ function initErrorsPage() {
   });
   document.getElementById("bulk-retry-button").addEventListener("click", () => bulkRetryErrors());
 
+  const dayFilterInput = document.getElementById("analytics-day-filter");
+  dayFilterInput.value = getTodayUtcDateString();
+  dayFilterInput.addEventListener("change", (event) => {
+    // A cleared date picker fires "change" with value === "" — fall back to
+    // today rather than sending an empty `day` (which the server rejects).
+    const day = event.target.value === "" ? getTodayUtcDateString() : event.target.value;
+    dayFilterInput.value = day;
+    loadAnalytics(day);
+  });
+
   loadErrors();
-  loadAnalytics();
+  loadAnalytics(dayFilterInput.value);
 }
 
 // ---------------------------------------------------------------------------
@@ -1038,6 +1059,7 @@ if (typeof module !== "undefined") {
     computeLastPageOffset,
     formatTimestamp,
     formatAnalyticsPercentage,
+    getTodayUtcDateString,
     // `adminFetch` touches only `fetch`/`window.location`, never `document`,
     // so it's testable here without a DOM/jsdom dependency (see
     // test/public/app.test.ts) — used specifically to prove that a 403
