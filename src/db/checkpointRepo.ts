@@ -1,7 +1,25 @@
 import type Database from "better-sqlite3";
 import { mapRowKeysToCamelCase } from "./sqlRowMapping.js";
 
-export type MigrationCheckpointStatus = "pending" | "in_progress" | "completed" | "failed";
+/**
+ * - `pending` — checkpoint row exists (or was seeded from a prior run) but
+ *   this country hasn't started processing yet in the current run.
+ * - `running` — actively being processed right now, in this process, as of
+ *   the last time this row was read. Set as the very first step of
+ *   `runCountryMigration` (see its doc comment for the full lifecycle) and
+ *   never written anywhere else.
+ * - `halted` — was being processed, then got interrupted mid-page by a
+ *   pause/stop `controlSignal` (or a manual `/stop`); NOT currently active.
+ *   A resumed run re-fetches and re-processes the same in-flight page. Easy
+ *   to confuse with `running` — `running` means work is happening right
+ *   now, `halted` means it was happening and stopped.
+ * - `completed` — the country's Leads DB pages were exhausted; nothing left
+ *   to process.
+ * - `failed` — an unrecoverable exception occurred anywhere between the
+ *   `running` transition and a terminal status (mapping lookup, page fetch,
+ *   etc.); the run continues with the next country.
+ */
+export type MigrationCheckpointStatus = "pending" | "running" | "halted" | "completed" | "failed";
 
 export interface MigrationCheckpointRow {
   readonly id: number;

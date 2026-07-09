@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
+import { mkdtempSync, rmSync, copyFileSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import Database from "better-sqlite3";
 import { migrate } from "../../src/db/migrate.js";
 
@@ -20,7 +22,7 @@ describe("migrate", () => {
 
     const result = migrate(db, migrationsDir);
 
-    expect(result.appliedVersions).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(result.appliedVersions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(tableNames(db)).toEqual([
       "field_mappings",
       "import_errors",
@@ -34,7 +36,7 @@ describe("migrate", () => {
     const appliedRows = db
       .prepare(`SELECT version FROM schema_migrations ORDER BY version ASC`)
       .all() as { version: number }[];
-    expect(appliedRows.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(appliedRows.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
   });
 
   it("is idempotent: rerunning migrate on an already-migrated database applies nothing new", () => {
@@ -48,7 +50,7 @@ describe("migrate", () => {
     const countRow = db
       .prepare(`SELECT COUNT(*) as count FROM schema_migrations`)
       .get() as { count: number };
-    expect(countRow.count).toBe(8);
+    expect(countRow.count).toBe(9);
   });
 
   it("enforces the unique (source_db, source_table, source_column) constraint on field_mappings", () => {
@@ -170,6 +172,77 @@ describe("migration_runs / migration_checkpoints / import_errors DDL", () => {
         `)
         .run(runId, "ar", 0, "bogus", now, now),
     ).toThrowError(/CHECK constraint failed/);
+  });
+
+  it("accepts the 'running' and 'halted' migration_checkpoints.status values", () => {
+    const db = freshDb();
+    const runId = insertRun(db);
+    const now = new Date().toISOString();
+    const insert = db.prepare(`
+      INSERT INTO migration_checkpoints
+        (run_id, country_code, last_offset, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+
+    expect(() => insert.run(runId, "ar", 0, "running", now, now)).not.toThrow();
+    expect(() => insert.run(runId, "br", 0, "halted", now, now)).not.toThrow();
+  });
+
+  it("rejects the retired 'in_progress' migration_checkpoints.status value via the CHECK constraint", () => {
+    const db = freshDb();
+    const runId = insertRun(db);
+    const now = new Date().toISOString();
+
+    expect(() =>
+      db
+        .prepare(`
+          INSERT INTO migration_checkpoints
+            (run_id, country_code, last_offset, status, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `)
+        .run(runId, "ar", 0, "in_progress", now, now),
+    ).toThrowError(/CHECK constraint failed/);
+  });
+
+  it("translates pre-existing 'in_progress' migration_checkpoints rows to 'halted' when migration 009 runs", () => {
+    let tempDir: string | undefined;
+    try {
+      tempDir = mkdtempSync(path.join(tmpdir(), "migrate-009-"));
+      const priorFiles = readdirSync(migrationsDir).filter((name) => {
+        const match = name.match(/^(\d+)_.+\.sql$/);
+        return match !== null && Number.parseInt(match[1] as string, 10) < 9;
+      });
+      for (const name of priorFiles) {
+        copyFileSync(path.join(migrationsDir, name), path.join(tempDir, name));
+      }
+
+      const db = new Database(":memory:");
+      const firstResult = migrate(db, tempDir);
+      expect(firstResult.appliedVersions).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+
+      const runId = insertRun(db);
+      const now = new Date().toISOString();
+      const insertResult = db
+        .prepare(`
+          INSERT INTO migration_checkpoints
+            (run_id, country_code, last_offset, status, created_at, updated_at)
+          VALUES (?, ?, ?, 'in_progress', ?, ?)
+        `)
+        .run(runId, "ar", 0, now, now);
+      const checkpointId = Number(insertResult.lastInsertRowid);
+
+      const secondResult = migrate(db, migrationsDir);
+      expect(secondResult.appliedVersions).toEqual([9]);
+
+      const row = db
+        .prepare(`SELECT status FROM migration_checkpoints WHERE id = ?`)
+        .get(checkpointId) as { status: string };
+      expect(row.status).toBe("halted");
+    } finally {
+      if (tempDir) {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    }
   });
 
   it("enforces the migration_checkpoints.run_id foreign key", () => {

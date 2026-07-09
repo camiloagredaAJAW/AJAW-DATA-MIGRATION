@@ -285,6 +285,23 @@ interface CountryMigrationContext {
  * page, after every record in that page has been attempted (accepted
  * duplicate-risk decision — never per record).
  *
+ * Status lifecycle: the checkpoint is set to `running` as the very first
+ * step inside the try block below (i.e. before the mapping lookup and the
+ * page loop even start), so it reads `running` for the entire time this
+ * country is actively being processed. From there it moves to exactly one
+ * terminal status:
+ *   - `completed` — the loop reached the exhausting page.
+ *   - `failed` — ANY exception anywhere from the `running` transition
+ *     onward (the mapping lookup, a page fetch, a per-page AiSearch push,
+ *     etc.) — see the outer catch below. This is deliberate: nothing between
+ *     `running` and a terminal status is allowed to throw without being
+ *     caught here, so a checkpoint can never be left stuck reading `running`
+ *     with nothing actually processing it.
+ *   - `halted` — the `controlSignal` reported non-`running` (pause/stop),
+ *     checked after the try/catch so it can override a `completed` result
+ *     that never actually happened (the loop broke out on `halted = true`
+ *     before reaching the exhausting page).
+ *
  * A per-record failure (Axelor rejects the create) is logged to
  * `import_errors` and processing continues with the next record. A failure
  * fetching the page itself (e.g. HTTP 500 from the Leads DB) is logged once
@@ -305,7 +322,6 @@ async function runCountryMigration(ctx: CountryMigrationContext): Promise<Countr
     ctx;
 
   const checkpoint = upsertCheckpoint(db, runId, countryCode);
-  const mappings = listFieldMappings(db, { sourceDb: countryCode, sourceTable: SOURCE_TABLE });
 
   let offset = checkpoint.lastOffset;
   let aiSearchId = checkpoint.aiSearchId;
@@ -314,7 +330,17 @@ async function runCountryMigration(ctx: CountryMigrationContext): Promise<Countr
   let finalStatus: MigrationCheckpointStatus = checkpoint.status;
   let halted = false;
 
+  // Everything from here down — marking the checkpoint 'running', the
+  // mapping lookup, and the whole page/record loop — lives inside this try
+  // so ANY exception in that entire region (not just ones raised inside the
+  // loop) still resolves the checkpoint to 'failed' below. Without this, a
+  // throw in the setup gap (e.g. listFieldMappings hitting lock contention)
+  // would propagate uncaught past this function with the checkpoint already
+  // marked 'running' and nothing left to ever move it off that status.
   try {
+    setStatus(db, checkpoint.id, "running");
+    const mappings = listFieldMappings(db, { sourceDb: countryCode, sourceTable: SOURCE_TABLE });
+
     for (;;) {
       if (controlSignal.state(runId) !== "running") {
         halted = true;
@@ -412,8 +438,8 @@ async function runCountryMigration(ctx: CountryMigrationContext): Promise<Countr
   }
 
   if (halted) {
-    setStatus(db, checkpoint.id, "in_progress");
-    finalStatus = "in_progress";
+    setStatus(db, checkpoint.id, "halted");
+    finalStatus = "halted";
   }
 
   return { countryCode, processedCount, failedCount, status: finalStatus, halted };

@@ -117,6 +117,32 @@ function renderRunSummary(run) {
   `;
 }
 
+/**
+ * Pure predicate for whether a country's checkpoint row should show a Retry
+ * button — extracted so it's unit-testable without a DOM, mirroring
+ * `computeControlGating`'s pattern. `"failed"` and `"halted"` are the only
+ * two statuses a country can be stuck at with no other path forward;
+ * `"running"` is deliberately excluded — a country reading `running` still
+ * has an active (or, if the process died, orphaned-but-not-yet-terminal)
+ * checkpoint, and retrying it would race whatever might still be writing to
+ * it.
+ */
+function canRetryCountry(status) {
+  return status === "failed" || status === "halted";
+}
+
+/**
+ * Pure predicate for whether `retryCountry` must show the duplicate-write-risk
+ * confirmation dialog before retrying — extracted so it's unit-testable
+ * without a DOM, mirroring `canRetryCountry` above. Only `"halted"` carries
+ * that risk (retrying it re-fetches and re-processes the in-flight page it
+ * was interrupted on); `"failed"` halts before any page write, so it needs
+ * no confirmation.
+ */
+function requiresHaltedRetryConfirmation(status) {
+  return status === "halted";
+}
+
 function renderCheckpoints(checkpoints) {
   const tbody = document.querySelector("#checkpoints-table tbody");
   tbody.innerHTML = "";
@@ -124,7 +150,7 @@ function renderCheckpoints(checkpoints) {
     const row = document.createElement("tr");
     row.dataset.countryCode = checkpoint.countryCode;
     row.dataset.status = checkpoint.status;
-    const canRetry = checkpoint.status === "failed" || checkpoint.status === "in_progress";
+    const canRetry = canRetryCountry(checkpoint.status);
     row.innerHTML = `
       <td>${escapeHtml(checkpoint.countryCode)}</td>
       <td>${checkpoint.lastOffset}</td>
@@ -348,14 +374,14 @@ async function retryCountry(row) {
   const errorEl = document.getElementById("dashboard-error");
   hideError(errorEl);
 
-  // "in_progress" means this country was halted mid-page — resuming it
+  // "halted" means this country was halted mid-page — resuming it
   // re-fetches and re-processes that SAME page, which can re-create
   // AiSearchResults records for rows in it that were already individually
   // saved to Axelor before the halt (a known, pre-existing risk this button
   // now makes a single click away). "failed" halts BEFORE any page write
   // (see the outer-catch design), so it carries no such risk and needs no
   // confirmation.
-  if (row.dataset.status === "in_progress") {
+  if (requiresHaltedRetryConfirmation(row.dataset.status)) {
     const confirmed = window.confirm(
       "This country was paused/stopped mid-page. Resuming it may re-save records from that page that were already written to Axelor. Continue anyway?",
     );
@@ -1002,6 +1028,8 @@ if (typeof module !== "undefined") {
     describeRetryOutcome,
     describeCountryRetryOutcome,
     computeControlGating,
+    canRetryCountry,
+    requiresHaltedRetryConfirmation,
     formatRefreshCatalogResult,
     formatFullResetResult,
     formatBulkRetrySummary,

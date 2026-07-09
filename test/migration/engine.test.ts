@@ -4,6 +4,7 @@ import Database from "better-sqlite3";
 import { migrate } from "../../src/db/migrate.js";
 import { createRun, getRunById, updateRunStatus } from "../../src/db/runsRepo.js";
 import { getByRunCountry, upsertCheckpoint, advanceOffset, setAiSearchId } from "../../src/db/checkpointRepo.js";
+import { listFieldMappings } from "../../src/repos/mappingRepo.js";
 import {
   runMigration,
   pushAiSearchProgress,
@@ -18,6 +19,22 @@ import type { MigrationRunStatus } from "../../src/db/runsRepo.js";
 import type { AxelorConfig } from "../../src/config/env.js";
 import type { LeadsClientConfig } from "../../src/leads/leadsClient.js";
 import type { AxelorSessionClient } from "../../src/axelor/sessionClient.js";
+
+// `listFieldMappings` is a hard, non-injectable import inside
+// `runCountryMigration` (not part of `MigrationEngineDeps`) — this is the
+// only seam available to make it throw for the Fix 1 regression test below
+// (a checkpoint must never get stuck at 'running' when something in the
+// pre-loop setup gap throws). `vi.fn(actual.listFieldMappings)` wraps the
+// real implementation by default so every OTHER test in this file (which
+// never touches this mock) keeps exercising the genuine DB-backed behavior;
+// only the one test that opts in via `mockImplementationOnce` sees a throw.
+vi.mock("../../src/repos/mappingRepo.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/repos/mappingRepo.js")>();
+  return {
+    ...actual,
+    listFieldMappings: vi.fn(actual.listFieldMappings),
+  };
+});
 
 const migrationsDir = path.join(process.cwd(), "src", "migrations");
 
@@ -715,8 +732,41 @@ describe("runMigration", () => {
 
     const checkpoint = getByRunCountry(db, run.id, "AR");
     expect(checkpoint?.lastOffset).toBe(0);
-    expect(checkpoint?.status).not.toBe("completed");
-    expect(checkpoint?.status).not.toBe("failed");
+    expect(checkpoint?.status).toBe("halted");
+  });
+
+  it("sets the checkpoint status to 'running' before the country's first page is fetched, ahead of its terminal status", async () => {
+    const db = freshDb();
+    seedCatalog(db, ["AR"]);
+    seedTitleMapping(db, "AR");
+
+    const run = createRun(db);
+    let statusDuringFirstFetch: string | undefined;
+    const leadsFetchImpl = vi.fn().mockImplementation(async () => {
+      const checkpoint = getByRunCountry(db, run.id, "AR");
+      statusDuringFirstFetch = checkpoint?.status;
+      return textResponse(jsonLine({ legal_name: "ACME" }));
+    });
+
+    const { fetchImpl: axelorFetchImpl } = trackingAxelorFetch(100);
+
+    const deps: MigrationEngineDeps = {
+      db,
+      leadsConfig: leadsConfig(leadsFetchImpl as unknown as typeof fetch),
+      axelorConfig: axelorConfig(),
+      pageLimit: 100,
+      session: fakeSession(),
+      fetchImpl: axelorFetchImpl as unknown as typeof fetch,
+      countries: ["AR"],
+      runId: run.id,
+    };
+
+    const summary = await runMigration(deps);
+
+    expect(statusDuringFirstFetch).toBe("running");
+
+    const countrySummary = summary.countries.find((c) => c.countryCode === "AR");
+    expect(countrySummary?.status).toBe("completed");
   });
 
   it("does not overwrite migration_runs.status to 'completed' when the run was halted (paused/stopped)", async () => {
@@ -992,5 +1042,55 @@ describe("runMigration", () => {
     expect(errors[0]?.record_offset).toBeNull();
     expect(errors[0]?.error_reason).toMatch(/AiSearch progress sync failed/);
     expect(errors[0]?.error_reason).toMatch(/aiSearchId=100/);
+  });
+
+  it("resolves the checkpoint to 'failed' (never stuck at 'running') when a dependency in the pre-loop setup gap throws", async () => {
+    const db = freshDb();
+    seedCatalog(db, ["AR"]);
+    seedTitleMapping(db, "AR");
+
+    // Simulates a failure in the gap between the checkpoint being marked
+    // 'running' and the page loop actually starting (e.g. lock contention or
+    // schema drift on the field_mappings lookup) — the exact regression this
+    // test guards against: before the Fix 1 restructuring, nothing caught an
+    // exception thrown here, and the checkpoint was left reading 'running'
+    // forever with nothing left to process it.
+    vi.mocked(listFieldMappings).mockImplementationOnce(() => {
+      throw new Error("field_mappings lookup failed");
+    });
+
+    const leadsFetchImpl = vi.fn();
+    const axelorFetchImpl = vi.fn();
+
+    const deps: MigrationEngineDeps = {
+      db,
+      leadsConfig: leadsConfig(leadsFetchImpl as unknown as typeof fetch),
+      axelorConfig: axelorConfig(),
+      pageLimit: 100,
+      session: fakeSession(),
+      fetchImpl: axelorFetchImpl as unknown as typeof fetch,
+      countries: ["AR"],
+    };
+
+    const summary = await runMigration(deps);
+
+    // The exception was caught before the page loop ever ran — the Leads DB
+    // was never even reached.
+    expect(leadsFetchImpl).not.toHaveBeenCalled();
+
+    const countrySummary = summary.countries.find((c) => c.countryCode === "AR");
+    expect(countrySummary?.status).toBe("failed");
+    expect(countrySummary?.halted).toBe(false);
+
+    const checkpoint = getByRunCountry(db, summary.runId, "AR");
+    expect(checkpoint?.status).toBe("failed");
+
+    const errors = db.prepare(`SELECT * FROM import_errors WHERE country_code = 'AR'`).all() as {
+      error_reason: string;
+      record_offset: number | null;
+    }[];
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.record_offset).toBeNull();
+    expect(errors[0]?.error_reason).toMatch(/field_mappings lookup failed/);
   });
 });

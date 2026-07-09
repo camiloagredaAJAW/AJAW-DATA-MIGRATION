@@ -16,6 +16,8 @@ const {
   describeRetryOutcome,
   describeCountryRetryOutcome,
   computeControlGating,
+  canRetryCountry,
+  requiresHaltedRetryConfirmation,
   formatRefreshCatalogResult,
   formatFullResetResult,
   formatBulkRetrySummary,
@@ -35,6 +37,8 @@ const {
     resumeDisabled: boolean;
     stopDisabled: boolean;
   };
+  canRetryCountry: (status: string) => boolean;
+  requiresHaltedRetryConfirmation: (status: string) => boolean;
   formatRefreshCatalogResult: (result: { totalCatalogEntries: number; newPairs: unknown[] }) => string;
   formatFullResetResult: (result: {
     seed: { totalRows: number; appliedCount: number; skippedAdminCount: number };
@@ -146,6 +150,32 @@ describe("describeCountryRetryOutcome", () => {
   it("falls back to a generic 'unexpected status' label for any other status", () => {
     expect(describeCountryRetryOutcome(500, {})).toBe("unexpected status 500");
     expect(describeCountryRetryOutcome(418, {})).toBe("unexpected status 418");
+  });
+});
+
+describe("canRetryCountry", () => {
+  it("allows retry for 'failed' and 'halted'", () => {
+    expect(canRetryCountry("failed")).toBe(true);
+    expect(canRetryCountry("halted")).toBe(true);
+  });
+
+  it("disallows retry for 'pending', 'running', and 'completed'", () => {
+    expect(canRetryCountry("pending")).toBe(false);
+    expect(canRetryCountry("running")).toBe(false);
+    expect(canRetryCountry("completed")).toBe(false);
+  });
+});
+
+describe("requiresHaltedRetryConfirmation", () => {
+  it("requires confirmation only for 'halted'", () => {
+    expect(requiresHaltedRetryConfirmation("halted")).toBe(true);
+  });
+
+  it("does not require confirmation for 'pending', 'running', 'completed', or 'failed'", () => {
+    expect(requiresHaltedRetryConfirmation("pending")).toBe(false);
+    expect(requiresHaltedRetryConfirmation("running")).toBe(false);
+    expect(requiresHaltedRetryConfirmation("completed")).toBe(false);
+    expect(requiresHaltedRetryConfirmation("failed")).toBe(false);
   });
 });
 
