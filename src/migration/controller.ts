@@ -6,7 +6,11 @@ import {
   updateRunStatus,
   type MigrationRunRow,
 } from "../db/runsRepo.js";
-import { listByRun, type MigrationCheckpointStatus } from "../db/checkpointRepo.js";
+import {
+  getMostRecentCheckpointForCountry,
+  listLatestCheckpointsPerCountry,
+  type MigrationCheckpointStatus,
+} from "../db/checkpointRepo.js";
 import {
   listImportErrors,
   countImportErrors,
@@ -35,6 +39,18 @@ export interface MigrationRunSummary {
 export type ControlActionOutcome =
   | { readonly outcome: "ok"; readonly run: MigrationRunSummary }
   | { readonly outcome: "conflict"; readonly message: string };
+
+/**
+ * `retryCountry()`'s outcome. `"not_found"` means the country has no
+ * checkpoint history at all (`getMostRecentCheckpointForCountry` returns
+ * null) — nothing to retry. `"conflict"` mirrors `ControlActionOutcome`'s
+ * shape/naming for the same "another run/bulk-retry is active" reasons
+ * `start()` already rejects on.
+ */
+export type RetryCountryOutcome =
+  | { readonly outcome: "conflict"; readonly message: string }
+  | { readonly outcome: "not_found" }
+  | { readonly outcome: "ok"; readonly run: MigrationRunSummary };
 
 /**
  * `resetEverything()`'s outcome: unlike the passthrough it used to be, it can
@@ -153,6 +169,28 @@ export interface MigrationController {
    * shared instance.
    */
   resetEverything(): Promise<ResetActionOutcome>;
+  /**
+   * Retries JUST one country: creates a NEW `migration_runs` row scoped to
+   * `[countryCode]` via `launch(run.id, [countryCode])`. Inside that run,
+   * `upsertCheckpoint` (called by `runCountryMigration`) finds no existing
+   * checkpoint for `(newRunId, countryCode)` and so seeds `last_offset`/
+   * `ai_search_id` from `getMostRecentCheckpointForCountry` — i.e. this
+   * correctly resumes the country from its last known state rather than
+   * restarting it from offset 0, and never touches any other country.
+   *
+   * Synchronous, NOT awaited internally (mirrors `start()`/`resume()`, not
+   * `retryErrorsBulk()`) — a country retry can take anywhere from seconds to
+   * hours depending on how much of that country remains, so this must not
+   * hold the call open. The admin watches progress via the dashboard's
+   * existing status polling, exactly like `start()`/`resume()` already work.
+   *
+   * Rejects with `{ outcome: "not_found" }` when the country has no
+   * checkpoint history at all — nothing to retry. Rejects with
+   * `{ outcome: "conflict" }` when another run is already active
+   * (`getActiveRun(db) !== null` — must be idle first, same precondition
+   * philosophy as `start()`) or when a bulk retry is in flight.
+   */
+  retryCountry(countryCode: string): RetryCountryOutcome;
 }
 
 /**
@@ -243,8 +281,8 @@ export function createMigrationController(
     }
   }
 
-  function launch(runId: number): void {
-    const promise = runMigrationFn({ ...deps, runId });
+  function launch(runId: number, countries?: readonly string[]): void {
+    const promise = runMigrationFn({ ...deps, runId, ...(countries !== undefined ? { countries } : {}) });
     registry.set(runId, promise);
     promise
       .catch((error: unknown) => {
@@ -310,13 +348,17 @@ export function createMigrationController(
         return { run: null, checkpoints: [], totals: { errors: 0 }, axelorBaseUrl: deps.axelorConfig.baseUrl };
       }
 
-      const checkpoints = listByRun(db, mostRecent.id).map((checkpoint) => ({
+      const checkpoints = listLatestCheckpointsPerCountry(db).map((checkpoint) => ({
         countryCode: checkpoint.countryCode,
         lastOffset: checkpoint.lastOffset,
         status: checkpoint.status,
         aiSearchId: checkpoint.aiSearchId,
       }));
-      const errors = countImportErrors(db, { runId: mostRecent.id });
+      // Not scoped to `runId: mostRecent.id` — since checkpoints above now
+      // span every run, not just the newest, the error total must match: a
+      // small one-country retry run can become "most recent" while a big
+      // multi-country run's errors are still unresolved and relevant.
+      const errors = countImportErrors(db, { resolved: false });
 
       return {
         run: {
@@ -421,6 +463,24 @@ export function createMigrationController(
       } finally {
         resetInFlight = false;
       }
+    },
+
+    retryCountry(countryCode: string): RetryCountryOutcome {
+      if (bulkRetryInProgress) {
+        return { outcome: "conflict", message: "Cannot retry a country while a bulk retry is in progress" };
+      }
+      if (getActiveRun(db) !== null) {
+        return { outcome: "conflict", message: "A migration run is already running or paused" };
+      }
+
+      const priorCheckpoint = getMostRecentCheckpointForCountry(db, countryCode);
+      if (priorCheckpoint === null) {
+        return { outcome: "not_found" };
+      }
+
+      const run = createRun(db);
+      launch(run.id, [countryCode]);
+      return { outcome: "ok", run: summarize(run) };
     },
   };
 }

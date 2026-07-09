@@ -37,6 +37,10 @@ const errorIdParamSchema = z.object({
   id: z.coerce.number().int().positive(),
 });
 
+const countryCodeParamSchema = z.object({
+  countryCode: z.string().min(1),
+});
+
 /** JSON body (not query-string params), so no `z.coerce` unlike `errorsQuerySchema`. */
 const bulkRetryBodySchema = z.object({
   runId: z.number().int().positive().optional(),
@@ -264,6 +268,31 @@ export function registerAdminBffRoutes(
       return reply.code(409).send(conflictError(result.message));
     }
     return reply.code(202).send({ data: result.run });
+  });
+
+  fastify.post("/admin/api/migration/countries/:countryCode/retry", async (request, reply) => {
+    const parsedParams = countryCodeParamSchema.safeParse(request.params);
+    if (!parsedParams.success) {
+      return reply.code(400).send(validationError(parsedParams.error.message));
+    }
+
+    const outcome = controller.retryCountry(parsedParams.data.countryCode);
+    switch (outcome.outcome) {
+      case "not_found":
+        request.log.warn(
+          { route: "POST /admin/api/migration/countries/:countryCode/retry", reason: "not_found" },
+          "admin country retry failed",
+        );
+        return reply.code(404).send(notFoundError("no checkpoint history for this country"));
+      case "conflict":
+        request.log.warn(
+          { route: "POST /admin/api/migration/countries/:countryCode/retry", reason: outcome.message },
+          "admin country retry failed",
+        );
+        return reply.code(409).send(conflictError(outcome.message));
+      case "ok":
+        return reply.send({ data: outcome.run });
+    }
   });
 
   fastify.post("/admin/api/catalog/refresh", async (_request, reply) => {

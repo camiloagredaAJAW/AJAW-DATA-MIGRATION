@@ -14,6 +14,7 @@ const appJsPath = path.join(process.cwd(), "public", "app.js");
 const {
   escapeHtml,
   describeRetryOutcome,
+  describeCountryRetryOutcome,
   computeControlGating,
   formatRefreshCatalogResult,
   formatFullResetResult,
@@ -27,6 +28,7 @@ const {
 } = require(appJsPath) as {
   escapeHtml: (value: unknown) => string;
   describeRetryOutcome: (status: number, body: unknown) => string;
+  describeCountryRetryOutcome: (status: number, body: unknown) => string;
   computeControlGating: (runStatus: string | null) => {
     startDisabled: boolean;
     pauseDisabled: boolean;
@@ -122,6 +124,28 @@ describe("describeRetryOutcome", () => {
   it("falls back to a generic 'unexpected status' label for any other status", () => {
     expect(describeRetryOutcome(500, {})).toBe("unexpected status 500");
     expect(describeRetryOutcome(418, {})).toBe("unexpected status 418");
+  });
+});
+
+describe("describeCountryRetryOutcome", () => {
+  it("maps 404 to 'no history for this country'", () => {
+    expect(describeCountryRetryOutcome(404, {})).toBe("no history for this country");
+  });
+
+  it("maps 409 to the response's error message, falling back to 'conflict'", () => {
+    expect(describeCountryRetryOutcome(409, { error: { message: "run is active" } })).toBe(
+      "run is active",
+    );
+    expect(describeCountryRetryOutcome(409, {})).toBe("conflict");
+  });
+
+  it("maps 200 to 'retry started'", () => {
+    expect(describeCountryRetryOutcome(200, {})).toBe("retry started");
+  });
+
+  it("falls back to a generic 'unexpected status' label for any other status", () => {
+    expect(describeCountryRetryOutcome(500, {})).toBe("unexpected status 500");
+    expect(describeCountryRetryOutcome(418, {})).toBe("unexpected status 418");
   });
 });
 

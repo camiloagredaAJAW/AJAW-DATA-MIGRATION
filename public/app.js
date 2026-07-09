@@ -122,11 +122,17 @@ function renderCheckpoints(checkpoints) {
   tbody.innerHTML = "";
   for (const checkpoint of checkpoints) {
     const row = document.createElement("tr");
+    row.dataset.countryCode = checkpoint.countryCode;
+    row.dataset.status = checkpoint.status;
+    const canRetry = checkpoint.status === "failed" || checkpoint.status === "in_progress";
     row.innerHTML = `
       <td>${escapeHtml(checkpoint.countryCode)}</td>
       <td>${checkpoint.lastOffset}</td>
       <td>${escapeHtml(checkpoint.status)}</td>
       <td>${checkpoint.aiSearchId ?? "-"}</td>
+      <td>
+        ${canRetry ? `<button data-action="retry-country">Retry</button><span data-role="retry-country-result" class="muted"></span>` : ""}
+      </td>
     `;
     tbody.appendChild(row);
   }
@@ -326,16 +332,73 @@ async function resetEverything() {
   }
 }
 
+// Maps the country-retry endpoint's outcomes (404/409/200 — see
+// adminBffRoutes.ts's POST /admin/api/migration/countries/:countryCode/retry)
+// to a short human label — mirrors `describeRetryOutcome`'s pattern above.
+function describeCountryRetryOutcome(status, body) {
+  if (status === 404) return "no history for this country";
+  if (status === 409) return body?.error?.message ?? "conflict";
+  if (status === 200) return "retry started";
+  return `unexpected status ${status}`;
+}
+
+async function retryCountry(row) {
+  const countryCode = row.dataset.countryCode;
+  const resultEl = row.querySelector('[data-role="retry-country-result"]');
+  const errorEl = document.getElementById("dashboard-error");
+  hideError(errorEl);
+
+  // "in_progress" means this country was halted mid-page — resuming it
+  // re-fetches and re-processes that SAME page, which can re-create
+  // AiSearchResults records for rows in it that were already individually
+  // saved to Axelor before the halt (a known, pre-existing risk this button
+  // now makes a single click away). "failed" halts BEFORE any page write
+  // (see the outer-catch design), so it carries no such risk and needs no
+  // confirmation.
+  if (row.dataset.status === "in_progress") {
+    const confirmed = window.confirm(
+      "This country was paused/stopped mid-page. Resuming it may re-save records from that page that were already written to Axelor. Continue anyway?",
+    );
+    if (!confirmed) return;
+  }
+
+  resultEl.textContent = "starting...";
+
+  try {
+    const { status, body } = await adminFetchJson(
+      `/admin/api/migration/countries/${encodeURIComponent(countryCode)}/retry`,
+      { method: "POST" },
+    );
+    resultEl.textContent = describeCountryRetryOutcome(status, body);
+    // No immediate `loadDashboard()` here on success, unlike `resetEverything`
+    // and the Errors page's bulk retry: those are synchronous, already-fully-
+    // complete operations by the time their response arrives, so an
+    // immediate refresh is correct there. `retryCountry`'s 200 response only
+    // means the run was LAUNCHED (fire-and-forget, still in progress) — an
+    // immediate `renderCheckpoints()` rebuild would destroy this very
+    // `resultEl` (and its "retry started" text) within milliseconds. The
+    // pre-existing 10-second auto-refresh in `initDashboardPage()` will pick
+    // up the real status once the retry actually progresses.
+  } catch (error) {
+    if (error.message !== "unauthenticated") {
+      console.error(error);
+      resultEl.textContent = "could not reach the server";
+    }
+  }
+}
+
 function initDashboardPage() {
   const runSummary = document.getElementById("run-summary");
   runSummary.insertAdjacentHTML(
     "beforebegin",
-    // NOTE: `controller.status()` (adminBffRoutes.ts/controller.ts, PR3)
-    // counts every import_errors row for this run, not only unresolved ones
-    // — labeled "recorded", not "unresolved", to stay accurate to that
-    // existing backend behavior. See errors.html for the resolved/unresolved
-    // filter.
-    '<p class="muted">Errors recorded for the current run: <strong id="error-count">-</strong> (see the Errors page to filter by resolved status)</p>',
+    // NOTE: `controller.status()` (adminBffRoutes.ts/controller.ts) calls
+    // `countImportErrors(db, { resolved: false })` — every UNRESOLVED
+    // import_errors row across EVERY run, not scoped to "the current run".
+    // Per-run scoping stopped making sense once a single-country retry
+    // (retryCountry) can spin up its own tiny run that becomes "most
+    // recent" while a much larger run's errors are still outstanding. See
+    // errors.html to filter by run, country, or resolved status.
+    '<p class="muted">Unresolved errors (all runs): <strong id="error-count">-</strong> (see the Errors page to filter by run, country, or resolved status)</p>',
   );
 
   document.getElementById("start-button").addEventListener("click", () => runControlAction("start"));
@@ -344,6 +407,11 @@ function initDashboardPage() {
   document.getElementById("stop-button").addEventListener("click", () => runControlAction("stop"));
   document.getElementById("refresh-catalog-button").addEventListener("click", refreshCatalog);
   document.getElementById("refresh-dashboard-button").addEventListener("click", loadDashboard);
+  document.querySelector("#checkpoints-table tbody").addEventListener("click", (event) => {
+    if (event.target.dataset.action !== "retry-country") return;
+    const row = event.target.closest("tr");
+    retryCountry(row);
+  });
 
   document.getElementById("show-reset-form-button").addEventListener("click", () => setResetFormVisible(true));
   document.getElementById("cancel-reset-button").addEventListener("click", () => setResetFormVisible(false));
@@ -932,6 +1000,7 @@ if (typeof module !== "undefined") {
   module.exports = {
     escapeHtml,
     describeRetryOutcome,
+    describeCountryRetryOutcome,
     computeControlGating,
     formatRefreshCatalogResult,
     formatFullResetResult,

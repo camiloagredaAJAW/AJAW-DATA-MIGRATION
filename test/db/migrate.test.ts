@@ -20,7 +20,7 @@ describe("migrate", () => {
 
     const result = migrate(db, migrationsDir);
 
-    expect(result.appliedVersions).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(result.appliedVersions).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(tableNames(db)).toEqual([
       "field_mappings",
       "import_errors",
@@ -34,7 +34,7 @@ describe("migrate", () => {
     const appliedRows = db
       .prepare(`SELECT version FROM schema_migrations ORDER BY version ASC`)
       .all() as { version: number }[];
-    expect(appliedRows.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(appliedRows.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
   });
 
   it("is idempotent: rerunning migrate on an already-migrated database applies nothing new", () => {
@@ -48,7 +48,7 @@ describe("migrate", () => {
     const countRow = db
       .prepare(`SELECT COUNT(*) as count FROM schema_migrations`)
       .get() as { count: number };
-    expect(countRow.count).toBe(7);
+    expect(countRow.count).toBe(8);
   });
 
   it("enforces the unique (source_db, source_table, source_column) constraint on field_mappings", () => {
@@ -82,6 +82,33 @@ describe("migrate", () => {
     expect(() =>
       insert.run("ar", "companies", "cuit", "NotARealDomain", "seed", now, now),
     ).toThrowError(/CHECK constraint failed/);
+  });
+
+  it("creates indexes on migration_checkpoints.country_code and import_errors.resolved — both queried on every 10-second dashboard poll", () => {
+    const db = new Database(":memory:");
+    migrate(db, migrationsDir);
+
+    const checkpointIndexes = db.prepare(`PRAGMA index_list(migration_checkpoints)`).all() as {
+      name: string;
+    }[];
+    const importErrorIndexes = db.prepare(`PRAGMA index_list(import_errors)`).all() as {
+      name: string;
+    }[];
+
+    expect(checkpointIndexes.map((index) => index.name)).toContain(
+      "idx_migration_checkpoints_country_code",
+    );
+    expect(importErrorIndexes.map((index) => index.name)).toContain("idx_import_errors_resolved");
+
+    const checkpointIndexInfo = db
+      .prepare(`PRAGMA index_info(idx_migration_checkpoints_country_code)`)
+      .all() as { name: string }[];
+    expect(checkpointIndexInfo.map((column) => column.name)).toEqual(["country_code"]);
+
+    const importErrorIndexInfo = db
+      .prepare(`PRAGMA index_info(idx_import_errors_resolved)`)
+      .all() as { name: string }[];
+    expect(importErrorIndexInfo.map((column) => column.name)).toEqual(["resolved"]);
   });
 });
 

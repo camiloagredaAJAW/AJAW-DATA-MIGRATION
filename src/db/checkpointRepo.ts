@@ -126,6 +126,40 @@ export function listByRun(db: Database.Database, runId: number): MigrationCheckp
   return rows.map(mapSqlRowToCheckpointRow);
 }
 
+/**
+ * Lists the single most recent checkpoint for EVERY country that has ever
+ * been checkpointed, across ALL runs — not just one run's worth. Ordered by
+ * country_code, matching `listByRun`'s display order.
+ *
+ * Unlike `listByRun`, this is what a dashboard's "Per-Country Progress"
+ * table needs once a single-country retry can spin up its own
+ * `migration_runs` row: sourcing checkpoints from only "the most recent
+ * run" would make every OTHER country's progress disappear, even though
+ * their checkpoint rows still exist safely under an older run_id.
+ *
+ * The correlated subquery orders by `updated_at DESC, id DESC` — the exact
+ * same tie-break as `getMostRecentCheckpointForCountry` above — so the two
+ * functions can never disagree about which row is "latest" for a given
+ * country. `id DESC` alone would pick the row created last, which is not
+ * necessarily the row touched last (e.g. `advanceOffset`/`setStatus` update
+ * `updated_at` on an existing row without changing its id).
+ */
+export function listLatestCheckpointsPerCountry(db: Database.Database): MigrationCheckpointRow[] {
+  const rows = db
+    .prepare(`
+      SELECT * FROM migration_checkpoints mc
+      WHERE mc.id = (
+        SELECT id FROM migration_checkpoints mc2
+        WHERE mc2.country_code = mc.country_code
+        ORDER BY mc2.updated_at DESC, mc2.id DESC LIMIT 1
+      )
+      ORDER BY mc.country_code ASC
+    `)
+    .all() as Record<string, unknown>[];
+
+  return rows.map(mapSqlRowToCheckpointRow);
+}
+
 /** Sets last_offset on an existing checkpoint. Returns null if it does not exist. */
 export function advanceOffset(
   db: Database.Database,

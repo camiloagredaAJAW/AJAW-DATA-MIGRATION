@@ -4,7 +4,12 @@ import Database from "better-sqlite3";
 import { migrate } from "../../src/db/migrate.js";
 import { createMigrationController, type MigrationControllerDeps } from "../../src/migration/controller.js";
 import { createRun, getRunById, updateRunStatus, getActiveRun } from "../../src/db/runsRepo.js";
-import { advanceOffset, upsertCheckpoint, setAiSearchId } from "../../src/db/checkpointRepo.js";
+import {
+  advanceOffset,
+  getMostRecentCheckpointForCountry,
+  upsertCheckpoint,
+  setAiSearchId,
+} from "../../src/db/checkpointRepo.js";
 import { recordError, markResolved } from "../../src/db/importErrorRepo.js";
 import type { AxelorConfig } from "../../src/config/env.js";
 import type { LeadsClientConfig } from "../../src/leads/leadsClient.js";
@@ -274,6 +279,183 @@ describe("createMigrationController", () => {
       expect(status.checkpoints[0]?.lastOffset).toBe(250);
       expect(status.totals.errors).toBe(1);
       expect(status.axelorBaseUrl).toBe("http://axelor.example.test");
+    });
+
+    it("still shows every country's latest checkpoint after a newer run only touched ONE country (single-country-retry regression)", () => {
+      const db = freshDb();
+      const olderRun = createRun(db);
+      const arCheckpointOld = upsertCheckpoint(db, olderRun.id, "ar");
+      advanceOffset(db, arCheckpointOld.id, 100);
+      const clCheckpoint = upsertCheckpoint(db, olderRun.id, "cl");
+      advanceOffset(db, clCheckpoint.id, 200);
+
+      // The newer run only ever creates a checkpoint for "ar" (as
+      // retryCountry does) — "cl" is never touched by it.
+      const newerRun = createRun(db);
+      const arCheckpointNew = upsertCheckpoint(db, newerRun.id, "ar");
+      advanceOffset(db, arCheckpointNew.id, 150);
+
+      const controller = createMigrationController(db, fakeDeps(db));
+
+      const status = controller.status();
+
+      // The top-level run is still the most recent run, unrelated to the fix.
+      expect(status.run?.id).toBe(newerRun.id);
+      expect(status.checkpoints).toHaveLength(2);
+      const ar = status.checkpoints.find((c) => c.countryCode === "ar");
+      const cl = status.checkpoints.find((c) => c.countryCode === "cl");
+      expect(ar?.lastOffset).toBe(150);
+      expect(cl?.lastOffset).toBe(200);
+    });
+
+    it("counts unresolved errors across ALL runs, not just the most recent run's", () => {
+      const db = freshDb();
+      const olderRun = createRun(db);
+      recordError(db, {
+        runId: olderRun.id,
+        countryCode: "cl",
+        recordOffset: 1,
+        recordIdentifier: null,
+        errorReason: "boom-old",
+      });
+      const resolvedOldError = recordError(db, {
+        runId: olderRun.id,
+        countryCode: "cl",
+        recordOffset: 2,
+        recordIdentifier: null,
+        errorReason: "boom-old-resolved",
+      });
+      markResolved(db, resolvedOldError.id);
+
+      const newerRun = createRun(db);
+      recordError(db, {
+        runId: newerRun.id,
+        countryCode: "ar",
+        recordOffset: 1,
+        recordIdentifier: null,
+        errorReason: "boom-new",
+      });
+
+      const controller = createMigrationController(db, fakeDeps(db));
+
+      const status = controller.status();
+
+      // 1 unresolved from the older run + 1 unresolved from the newer run,
+      // excluding the resolved one — NOT scoped to newerRun.id alone.
+      expect(status.totals.errors).toBe(2);
+    });
+  });
+
+  describe("retryCountry", () => {
+    it("launches a new run scoped to just the given country, resuming from its persisted checkpoint", async () => {
+      const db = freshDb();
+      const priorRun = createRun(db);
+      updateRunStatus(db, priorRun.id, "stopped");
+      const priorCheckpoint = upsertCheckpoint(db, priorRun.id, "ar");
+      advanceOffset(db, priorCheckpoint.id, 300);
+      setAiSearchId(db, priorCheckpoint.id, 111);
+
+      const fn = vi.fn(resolvedRunMigrationFn());
+      const controller = createMigrationController(db, fakeDeps(db), { runMigrationFn: fn });
+
+      const outcome = controller.retryCountry("ar");
+
+      expect(outcome.outcome).toBe("ok");
+      if (outcome.outcome === "ok") {
+        expect(outcome.run.runId).not.toBe(priorRun.id);
+        expect(outcome.run.status).toBe("running");
+      }
+      expect(fn).toHaveBeenCalledWith(
+        expect.objectContaining({ countries: ["ar"] }),
+      );
+      const calledRunId = fn.mock.calls[0]?.[0]?.runId;
+      expect(calledRunId).not.toBe(priorRun.id);
+
+      // getMostRecentCheckpointForCountry is what upsertCheckpoint (inside
+      // the real runCountryMigration, not this fake) reads to seed the new
+      // run's checkpoint — confirming it still reflects the prior offset
+      // proves a real retryCountry call would resume from 300, not 0.
+      const seeded = getMostRecentCheckpointForCountry(db, "ar");
+      expect(seeded?.lastOffset).toBe(300);
+      expect(seeded?.aiSearchId).toBe(111);
+
+      await flushMicrotasks();
+    });
+
+    it("returns not_found for a country with zero checkpoint history", () => {
+      const db = freshDb();
+      const controller = createMigrationController(db, fakeDeps(db));
+
+      const outcome = controller.retryCountry("zz");
+
+      expect(outcome.outcome).toBe("not_found");
+    });
+
+    it("returns conflict, not not_found, when a run is already active AND the country has zero checkpoint history — conflict is checked first", () => {
+      const db = freshDb();
+      createRun(db); // defaults to status='running', i.e. active.
+
+      const controller = createMigrationController(db, fakeDeps(db));
+
+      const outcome = controller.retryCountry("zz");
+
+      expect(outcome.outcome).toBe("conflict");
+    });
+
+    it("returns a conflict when a run is already active (running or paused)", () => {
+      const db = freshDb();
+      const priorRun = createRun(db);
+      updateRunStatus(db, priorRun.id, "stopped");
+      upsertCheckpoint(db, priorRun.id, "ar");
+      createRun(db); // defaults to status='running', i.e. active.
+
+      const controller = createMigrationController(db, fakeDeps(db));
+
+      const outcome = controller.retryCountry("ar");
+
+      expect(outcome.outcome).toBe("conflict");
+    });
+
+    it("returns a conflict when a bulk retry is in progress", async () => {
+      const db = freshDb();
+      const priorRun = createRun(db);
+      updateRunStatus(db, priorRun.id, "stopped");
+      upsertCheckpoint(db, priorRun.id, "ar");
+      recordError(db, {
+        runId: priorRun.id,
+        countryCode: "ar",
+        recordOffset: 1,
+        recordIdentifier: null,
+        errorReason: "boom",
+      });
+
+      let releaseFetch: () => void = () => {};
+      const fetchGate = new Promise<void>((resolve) => {
+        releaseFetch = resolve;
+      });
+      const leadsFetchImpl = vi.fn().mockImplementation(async () => {
+        await fetchGate;
+        throw new Error("no such record");
+      });
+      const deps: MigrationControllerDeps = {
+        db,
+        leadsConfig: { ...fakeLeadsConfig(), fetchImpl: leadsFetchImpl as unknown as typeof fetch },
+        axelorConfig: fakeAxelorConfig(),
+        pageLimit: 100,
+        session: fakeSession(),
+      };
+      const controller = createMigrationController(db, deps, { runMigrationFn: resolvedRunMigrationFn() });
+
+      const bulkRetry = controller.retryErrorsBulk({ runId: priorRun.id });
+      await flushMicrotasks();
+
+      const outcome = controller.retryCountry("ar");
+
+      expect(outcome.outcome).toBe("conflict");
+      expect(getActiveRun(db)).toBeNull();
+
+      releaseFetch();
+      await bulkRetry;
     });
   });
 

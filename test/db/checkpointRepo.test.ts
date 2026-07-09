@@ -8,6 +8,7 @@ import {
   getByRunCountry,
   getMostRecentCheckpointForCountry,
   listByRun,
+  listLatestCheckpointsPerCountry,
   setAiSearchId,
   setStatus,
   upsertCheckpoint,
@@ -19,6 +20,11 @@ function freshDb(): Database.Database {
   const db = new Database(":memory:");
   migrate(db, migrationsDir);
   return db;
+}
+
+/** Backdates/forward-dates a checkpoint's updated_at, mirroring importErrorRepo.test.ts's setCreatedAt helper. */
+function setUpdatedAt(db: Database.Database, id: number, isoString: string): void {
+  db.prepare(`UPDATE migration_checkpoints SET updated_at = ? WHERE id = ?`).run(isoString, id);
 }
 
 describe("upsertCheckpoint", () => {
@@ -203,6 +209,101 @@ describe("listByRun", () => {
 
     expect(found).toHaveLength(1);
     expect(found[0]?.countryCode).toBe("ar");
+  });
+});
+
+describe("listLatestCheckpointsPerCountry", () => {
+  it("returns [] when there are no checkpoints at all", () => {
+    const db = freshDb();
+
+    const found = listLatestCheckpointsPerCountry(db);
+
+    expect(found).toEqual([]);
+  });
+
+  it("returns the highest-id checkpoint per country when a country has checkpoints across multiple runs", () => {
+    const db = freshDb();
+    const runA = createRun(db);
+    const checkpointA = upsertCheckpoint(db, runA.id, "ar");
+    advanceOffset(db, checkpointA.id, 500);
+
+    const runB = createRun(db);
+    const checkpointB = upsertCheckpoint(db, runB.id, "ar");
+    advanceOffset(db, checkpointB.id, 750);
+
+    const found = listLatestCheckpointsPerCountry(db);
+
+    expect(found).toHaveLength(1);
+    expect(found[0]?.id).toBe(checkpointB.id);
+    expect(found[0]?.runId).toBe(runB.id);
+    expect(found[0]?.lastOffset).toBe(750);
+  });
+
+  it("returns all countries that have ever had a checkpoint, ordered by country_code", () => {
+    const db = freshDb();
+    const run = createRun(db);
+    upsertCheckpoint(db, run.id, "cl");
+    upsertCheckpoint(db, run.id, "ar");
+    upsertCheckpoint(db, run.id, "br");
+
+    const found = listLatestCheckpointsPerCountry(db);
+
+    expect(found.map((row) => row.countryCode)).toEqual(["ar", "br", "cl"]);
+  });
+
+  it("still shows a country with only one checkpoint ever", () => {
+    const db = freshDb();
+    const run = createRun(db);
+    const checkpoint = upsertCheckpoint(db, run.id, "pe");
+
+    const found = listLatestCheckpointsPerCountry(db);
+
+    expect(found).toHaveLength(1);
+    expect(found[0]?.id).toBe(checkpoint.id);
+    expect(found[0]?.countryCode).toBe("pe");
+  });
+
+  it("picks the row with the later updated_at over the row with the higher id, matching getMostRecentCheckpointForCountry's tie-break", () => {
+    const db = freshDb();
+    const runA = createRun(db);
+    const checkpointA = upsertCheckpoint(db, runA.id, "ar");
+
+    const runB = createRun(db);
+    const checkpointB = upsertCheckpoint(db, runB.id, "ar");
+
+    // checkpointB has the higher id (created second), but checkpointA is
+    // backdated to a LATER updated_at than checkpointB — e.g. a status
+    // update touching the older run's checkpoint after the newer run's
+    // checkpoint row was created but before it was itself touched.
+    expect(checkpointB.id).toBeGreaterThan(checkpointA.id);
+    setUpdatedAt(db, checkpointB.id, "2026-01-01T00:00:00.000Z");
+    setUpdatedAt(db, checkpointA.id, "2026-01-02T00:00:00.000Z");
+
+    const found = listLatestCheckpointsPerCountry(db);
+
+    expect(found).toHaveLength(1);
+    expect(found[0]?.id).toBe(checkpointA.id);
+    expect(getMostRecentCheckpointForCountry(db, "ar")?.id).toBe(checkpointA.id);
+  });
+
+  it("shows each country's latest checkpoint alongside other untouched countries' latest checkpoints from an older run", () => {
+    const db = freshDb();
+    const runA = createRun(db);
+    upsertCheckpoint(db, runA.id, "ar");
+    upsertCheckpoint(db, runA.id, "cl");
+
+    const runB = createRun(db);
+    const retriedCheckpoint = upsertCheckpoint(db, runB.id, "ar");
+    advanceOffset(db, retriedCheckpoint.id, 999);
+
+    const found = listLatestCheckpointsPerCountry(db);
+
+    expect(found).toHaveLength(2);
+    const ar = found.find((row) => row.countryCode === "ar");
+    const cl = found.find((row) => row.countryCode === "cl");
+    expect(ar?.runId).toBe(runB.id);
+    expect(ar?.lastOffset).toBe(999);
+    expect(cl?.runId).toBe(runA.id);
   });
 });
 

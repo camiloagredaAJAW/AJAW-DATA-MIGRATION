@@ -932,6 +932,92 @@ describe("POST /admin/api/migration/{start,pause,resume,stop}", () => {
   });
 });
 
+describe("POST /admin/api/migration/countries/:countryCode/retry", () => {
+  it("returns 200 with the new run when the retry starts", async () => {
+    const db = freshDb();
+    const priorRun = createRun(db);
+    updateRunStatus(db, priorRun.id, "stopped");
+    upsertCheckpoint(db, priorRun.id, "AR");
+    const server = buildServer({
+      db,
+      authConfig,
+      migrationDeps: fakeMigrationDeps(db),
+      runMigrationFn: resolvedRunMigrationFn(),
+    });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/api/migration/countries/AR/retry",
+      headers: adminMutateHeaders(cookie),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.status).toBe("running");
+    await flushMicrotasks();
+  });
+
+  it("returns 404 for a country with no checkpoint history", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/api/migration/countries/ZZ/retry",
+      headers: adminMutateHeaders(cookie),
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json().error.code).toBe("not_found");
+  });
+
+  it("returns 409 when a migration run is already active", async () => {
+    const db = freshDb();
+    const priorRun = createRun(db);
+    updateRunStatus(db, priorRun.id, "stopped");
+    upsertCheckpoint(db, priorRun.id, "AR");
+    createRun(db); // defaults to status='running', i.e. active.
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/api/migration/countries/AR/retry",
+      headers: adminMutateHeaders(cookie),
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.code).toBe("conflict");
+  });
+
+  it("rejects a retry without an authenticated session", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/api/migration/countries/AR/retry",
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("rejects a retry missing the CSRF header even with a valid session", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/api/migration/countries/AR/retry",
+      headers: { cookie },
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+});
+
 describe("POST /admin/api/catalog/refresh", () => {
   function fakeRefreshLeadsConfig(): LeadsClientConfig {
     const fetchImpl = async () => ({
