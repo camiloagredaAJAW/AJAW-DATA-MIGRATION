@@ -47,34 +47,32 @@
       <span id="refresh-catalog-result" class="muted"></span>
     </div>
 
-    <section class="danger-zone">
-      <h2>Reset Everything</h2>
-      <button id="show-reset-form-button" class="danger">Reset Everything</button>
-      <div id="reset-form" hidden>
-        <p class="muted">
-          Wipes <strong>every</strong> migration run, checkpoint, and import
-          error, plus the field mapping and source catalog tables — then
-          immediately re-seeds field mappings from the committed dataset and
-          refreshes the source catalog from the live Leads DB, in this same
-          action. You do <strong>not</strong> need to click
-          "Refresh Catalog" afterward. This is irreversible: there is no undo
-          and no backup. Any field mappings you have edited on the Field
-          Mappings page are <strong>replaced</strong>, not merged — your edits
-          will be lost along with everything else.
-        </p>
-        <div class="controls-row">
-          <input
-            type="password"
-            id="reset-password-input"
-            placeholder="Re-enter your admin password to confirm"
-            autocomplete="off"
-          />
-          <button id="reset-everything-button" class="danger" disabled>Reset Everything</button>
-          <button id="cancel-reset-button">Cancel</button>
-        </div>
-        <span id="reset-everything-result" class="muted"></span>
+    <h2>Reset Everything</h2>
+    <p class="muted">
+      Wipes <strong>every</strong> migration run, checkpoint, and import
+      error, plus the field mapping and source catalog tables — then
+      immediately re-seeds field mappings from the committed dataset and
+      refreshes the source catalog from the live Leads DB, in this same
+      action. You do <strong>not</strong> need to click
+      "Refresh Catalog" afterward. This is irreversible: there is no undo
+      and no backup. Any field mappings you have edited on the Field
+      Mappings page are <strong>replaced</strong>, not merged — your edits
+      will be lost along with everything else.
+    </p>
+    <button id="show-reset-form-button" class="danger">Reset</button>
+    <div id="reset-form" class="danger-zone" hidden>
+      <div class="controls-row">
+        <input
+          type="password"
+          id="reset-password-input"
+          placeholder="Re-enter your admin password to confirm"
+          autocomplete="off"
+        />
+        <button id="reset-everything-button" class="danger" disabled>Reset Everything</button>
+        <button id="cancel-reset-button">Cancel</button>
       </div>
-    </section>
+      <span id="reset-everything-result" class="muted"></span>
+    </div>
 
     <h2>Per-Country Progress</h2>
     <table id="checkpoints-table">

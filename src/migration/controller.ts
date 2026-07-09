@@ -10,8 +10,10 @@ import { listByRun, type MigrationCheckpointStatus } from "../db/checkpointRepo.
 import {
   listImportErrors,
   countImportErrors,
+  getErrorAnalytics as getErrorAnalyticsFromRepo,
   type ImportErrorFilter,
   type ImportErrorRow,
+  type ErrorAnalyticsBucket,
 } from "../db/importErrorRepo.js";
 import { retrySingleRecord, type RetryOutcome } from "./retry.js";
 import { runMigration, type MigrationEngineDeps, type MigrationSummary } from "./engine.js";
@@ -45,6 +47,36 @@ export type ResetActionOutcome =
   | { readonly outcome: "ok"; readonly result: FullResetResult }
   | { readonly outcome: "conflict"; readonly message: string };
 
+/** Same shape as the Errors page's filter, minus `resolved` — `retryErrorsBulk` always forces `resolved: false`. */
+export interface BulkRetryFilter {
+  readonly runId?: number;
+  readonly countryCode?: string;
+}
+
+export interface BulkRetrySummary {
+  /** TRUE total matching rows (uncapped), from `countImportErrors`. */
+  readonly totalMatched: number;
+  /** Rows actually attempted this call, capped at `BULK_RETRY_MAX_ROWS_PER_CALL`. */
+  readonly processedCount: number;
+  readonly resolvedCount: number;
+  readonly failedCount: number;
+  /**
+   * Rows whose `performRetry` outcome was neither `"resolved"` nor `"failed"`
+   * (`"already_resolved" | "not_found" | "retry_in_progress"`) — a real,
+   * reachable race: a concurrent single-row `/admin/api/errors/:id/retry`
+   * call can resolve a row between this sweep's snapshot and the loop
+   * reaching it. Not a failed retry attempt, so it must not inflate
+   * `failedCount`.
+   */
+  readonly skippedCount: number;
+  readonly blockSize: number;
+  readonly blockCount: number;
+}
+
+export type BulkRetryOutcome =
+  | { readonly outcome: "conflict"; readonly message: string }
+  | { readonly outcome: "completed"; readonly summary: BulkRetrySummary };
+
 export interface MigrationStatusCheckpoint {
   readonly countryCode: string;
   readonly lastOffset: number;
@@ -77,12 +109,35 @@ export interface MigrationController {
   stop(): ControlActionOutcome;
   status(): MigrationStatusPayload;
   listErrors(filter: ImportErrorFilter): ListErrorsResult;
+  /** Whole-table (unfiltered) error breakdown by UTC day+hour — see `getErrorAnalytics` in importErrorRepo.ts. */
+  getErrorAnalytics(): ErrorAnalyticsBucket[];
   /**
    * Rejects with `{ outcome: "retry_in_progress" }` when a retry for the
    * same `errorId` is already in flight (see `inFlightRetries` in the
    * factory below) — both HTTP surfaces call this same shared instance.
    */
   retry(errorId: number): Promise<RetryOutcome>;
+  /**
+   * Retries every currently-unresolved `import_errors` row matching `filter`
+   * (`resolved` is always forced to `false` regardless of what `filter`
+   * contains — the point of a bulk retry is to re-attempt rows that are
+   * still failing), processed sequentially in blocks of
+   * `BULK_RETRY_BLOCK_SIZE`, in one synchronous call that returns a summary
+   * once every row has been attempted.
+   *
+   * Blocks with `{ outcome: "conflict" }` only when the active migration run
+   * is `"running"` — a `"paused"` run does NOT block, since the intended
+   * workflow is: pause the run, bulk-retry, then resume (bulk retry never
+   * touches `migration_runs`/checkpoints, only `import_errors` + Axelor, so
+   * resuming afterward is unaffected). This is a narrower check than
+   * `start()`/`resetEverything()`'s `getActiveRun(db) !== null`, which blocks
+   * on both `"running"` and `"paused"`.
+   *
+   * Also rejects with `{ outcome: "conflict" }` when another bulk retry is
+   * already in flight (see `bulkRetryInProgress` in the factory below) — only
+   * one may run process-wide at a time.
+   */
+  retryErrorsBulk(filter: BulkRetryFilter): Promise<BulkRetryOutcome>;
   /** Thin passthrough to `runRefreshCatalog` — see its doc comment for what it does. */
   refreshCatalog(): Promise<RefreshCatalogResult>;
   /**
@@ -146,6 +201,48 @@ export function createMigrationController(
    */
   let resetInFlight = false;
 
+  /** Block size `retryErrorsBulk` processes matching rows in, sequentially. */
+  const BULK_RETRY_BLOCK_SIZE = 20;
+
+  /**
+   * Hard cap on rows processed by a single `retryErrorsBulk()` call. Each row
+   * can involve 2-3 real network round-trips (Leads DB re-fetch, Axelor
+   * create, AiSearch progress push), each with up to a ~60s timeout when a
+   * dependency is degraded — with no cap, a filter matching hundreds/
+   * thousands of unresolved rows would make this ONE synchronous HTTP call
+   * run for a genuinely unbounded duration. This is a bounded-row-cap
+   * mitigation, not a background-job redesign: the admin re-issues the same
+   * call to continue past the cap (`totalMatched > processedCount` in the
+   * summary signals there is more to do).
+   */
+  const BULK_RETRY_MAX_ROWS_PER_CALL = 200;
+
+  /**
+   * True while a `retryErrorsBulk()` call is in flight. Only one process-wide
+   * bulk retry may run at a time — mirrors `resetInFlight`'s shape, collapsed
+   * to a single boolean for the same reason (`retryErrorsBulk` takes a
+   * filter, not an id, so there's nothing to key a `Set` by).
+   */
+  let bulkRetryInProgress = false;
+
+  /**
+   * Shared body of `retry()` and `retryErrorsBulk()`: the per-`errorId`
+   * in-flight guard plus the delegation to `retrySingleRecord`. Extracted so
+   * both call sites reuse the exact same concurrency guard and retry logic
+   * with zero duplication.
+   */
+  async function performRetry(errorId: number): Promise<RetryOutcome> {
+    if (inFlightRetries.has(errorId)) {
+      return { outcome: "retry_in_progress" };
+    }
+    inFlightRetries.add(errorId);
+    try {
+      return await retrySingleRecord(deps, errorId);
+    } finally {
+      inFlightRetries.delete(errorId);
+    }
+  }
+
   function launch(runId: number): void {
     const promise = runMigrationFn({ ...deps, runId });
     registry.set(runId, promise);
@@ -164,6 +261,9 @@ export function createMigrationController(
 
   return {
     start(): ControlActionOutcome {
+      if (bulkRetryInProgress) {
+        return { outcome: "conflict", message: "Cannot start a migration run while a bulk retry is in progress" };
+      }
       if (getActiveRun(db) !== null) {
         return { outcome: "conflict", message: "A migration run is already running or paused" };
       }
@@ -239,15 +339,66 @@ export function createMigrationController(
       };
     },
 
+    getErrorAnalytics(): ErrorAnalyticsBucket[] {
+      return getErrorAnalyticsFromRepo(db);
+    },
+
     async retry(errorId: number): Promise<RetryOutcome> {
-      if (inFlightRetries.has(errorId)) {
-        return { outcome: "retry_in_progress" };
+      return performRetry(errorId);
+    },
+
+    async retryErrorsBulk(filter: BulkRetryFilter): Promise<BulkRetryOutcome> {
+      const active = getActiveRun(db);
+      if (active !== null && active.status === "running") {
+        return {
+          outcome: "conflict",
+          message: "Pause the active migration run before retrying errors in bulk",
+        };
       }
-      inFlightRetries.add(errorId);
+      if (bulkRetryInProgress) {
+        return { outcome: "conflict", message: "A bulk retry is already in progress" };
+      }
+
+      bulkRetryInProgress = true;
       try {
-        return await retrySingleRecord(deps, errorId);
+        const totalMatched = countImportErrors(db, { ...filter, resolved: false });
+        const rows = listImportErrors(db, {
+          ...filter,
+          resolved: false,
+          limit: BULK_RETRY_MAX_ROWS_PER_CALL,
+        });
+        let resolvedCount = 0;
+        let failedCount = 0;
+        let skippedCount = 0;
+        let blockCount = 0;
+        for (let i = 0; i < rows.length; i += BULK_RETRY_BLOCK_SIZE) {
+          const block = rows.slice(i, i + BULK_RETRY_BLOCK_SIZE);
+          blockCount += 1;
+          for (const row of block) {
+            const outcome = await performRetry(row.id);
+            if (outcome.outcome === "resolved") {
+              resolvedCount += 1;
+            } else if (outcome.outcome === "failed") {
+              failedCount += 1;
+            } else {
+              skippedCount += 1;
+            }
+          }
+        }
+        return {
+          outcome: "completed",
+          summary: {
+            totalMatched,
+            processedCount: rows.length,
+            resolvedCount,
+            failedCount,
+            skippedCount,
+            blockSize: BULK_RETRY_BLOCK_SIZE,
+            blockCount,
+          },
+        };
       } finally {
-        inFlightRetries.delete(errorId);
+        bulkRetryInProgress = false;
       }
     },
 

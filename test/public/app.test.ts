@@ -17,9 +17,12 @@ const {
   computeControlGating,
   formatRefreshCatalogResult,
   formatFullResetResult,
+  formatBulkRetrySummary,
   computeErrorsPaginationState,
   computeCorrectedErrorsOffset,
+  computeLastPageOffset,
   formatTimestamp,
+  formatAnalyticsPercentage,
   adminFetch,
 } = require(appJsPath) as {
   escapeHtml: (value: unknown) => string;
@@ -35,6 +38,15 @@ const {
     seed: { totalRows: number; appliedCount: number; skippedAdminCount: number };
     catalog: { totalCatalogEntries: number; newPairs: unknown[] };
   }) => string;
+  formatBulkRetrySummary: (summary: {
+    totalMatched: number;
+    processedCount: number;
+    resolvedCount: number;
+    failedCount: number;
+    skippedCount: number;
+    blockSize: number;
+    blockCount: number;
+  }) => string;
   computeErrorsPaginationState: (
     offset: number,
     rowCount: number,
@@ -46,7 +58,9 @@ const {
     total: number,
     pageSize: number,
   ) => number | null;
+  computeLastPageOffset: (total: number, pageSize: number) => number;
   formatTimestamp: (isoString: string) => string;
+  formatAnalyticsPercentage: (percentage: number) => string;
   adminFetch: (path: string, options?: Record<string, unknown>) => Promise<Response>;
 };
 
@@ -145,6 +159,66 @@ describe("formatFullResetResult", () => {
         catalog: { totalCatalogEntries: 0, newPairs: [] },
       }),
     ).toBe("Reset complete: 163 field mappings seeded, 0 catalog entries found.");
+  });
+});
+
+describe("formatBulkRetrySummary", () => {
+  it("summarizes matched/processed totals, block breakdown, and resolved/failed counts when nothing was skipped or capped", () => {
+    expect(
+      formatBulkRetrySummary({
+        totalMatched: 45,
+        processedCount: 45,
+        resolvedCount: 40,
+        failedCount: 5,
+        skippedCount: 0,
+        blockSize: 20,
+        blockCount: 3,
+      }),
+    ).toBe("Retried 45 of 45 matching in 3 block(s) of 20: 40 resolved, 5 still failing.");
+  });
+
+  it("handles an all-zero summary (no matching unresolved rows)", () => {
+    expect(
+      formatBulkRetrySummary({
+        totalMatched: 0,
+        processedCount: 0,
+        resolvedCount: 0,
+        failedCount: 0,
+        skippedCount: 0,
+        blockSize: 20,
+        blockCount: 0,
+      }),
+    ).toBe("Retried 0 of 0 matching in 0 block(s) of 20: 0 resolved, 0 still failing.");
+  });
+
+  it("appends a skipped-count clause when skippedCount is nonzero", () => {
+    expect(
+      formatBulkRetrySummary({
+        totalMatched: 10,
+        processedCount: 10,
+        resolvedCount: 7,
+        failedCount: 2,
+        skippedCount: 1,
+        blockSize: 20,
+        blockCount: 1,
+      }),
+    ).toBe("Retried 10 of 10 matching in 1 block(s) of 20: 7 resolved, 2 still failing, 1 skipped.");
+  });
+
+  it("appends a remaining-rows note when the row cap left rows unprocessed", () => {
+    expect(
+      formatBulkRetrySummary({
+        totalMatched: 350,
+        processedCount: 200,
+        resolvedCount: 190,
+        failedCount: 10,
+        skippedCount: 0,
+        blockSize: 20,
+        blockCount: 10,
+      }),
+    ).toBe(
+      "Retried 200 of 350 matching in 10 block(s) of 20: 190 resolved, 10 still failing. 150 remaining — click Retry Failed (Bulk) again to continue.",
+    );
   });
 });
 
@@ -308,6 +382,24 @@ describe("computeCorrectedErrorsOffset", () => {
   });
 });
 
+describe("computeLastPageOffset", () => {
+  it("returns the start offset of the final page when total is not an exact multiple of pageSize", () => {
+    expect(computeLastPageOffset(249, 100)).toBe(200);
+  });
+
+  it("returns the start offset of the final page when total is an exact multiple of pageSize", () => {
+    expect(computeLastPageOffset(200, 100)).toBe(100);
+  });
+
+  it("returns 0 when everything fits on a single page", () => {
+    expect(computeLastPageOffset(50, 100)).toBe(0);
+  });
+
+  it("returns 0 when total is 0", () => {
+    expect(computeLastPageOffset(0, 100)).toBe(0);
+  });
+});
+
 describe("formatTimestamp", () => {
   it("formats a valid ISO timestamp as YYYY-MM-DD HH:mm:ss in local time", () => {
     const isoString = "2026-07-08T14:30:05.000Z";
@@ -323,5 +415,19 @@ describe("formatTimestamp", () => {
 
   it("returns the original string unchanged for a malformed/unparseable input", () => {
     expect(formatTimestamp("not-a-date")).toBe("not-a-date");
+  });
+});
+
+describe("formatAnalyticsPercentage", () => {
+  it("formats a percentage with exactly one decimal place and a trailing %", () => {
+    expect(formatAnalyticsPercentage(33.3)).toBe("33.3%");
+  });
+
+  it("formats a whole-number percentage with a trailing .0", () => {
+    expect(formatAnalyticsPercentage(100)).toBe("100.0%");
+  });
+
+  it("formats a zero percentage", () => {
+    expect(formatAnalyticsPercentage(0)).toBe("0.0%");
   });
 });

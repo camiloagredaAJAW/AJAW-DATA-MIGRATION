@@ -455,7 +455,7 @@ function initMappingsPage() {
 // Errors
 // ---------------------------------------------------------------------------
 
-const ERRORS_PAGE_SIZE = 50;
+const ERRORS_PAGE_SIZE = 100;
 let errorsOffset = 0;
 // The last offset that was actually rendered successfully — distinct from
 // `errorsOffset`, which a Prev/Next click mutates *before* `loadErrors()` is
@@ -503,6 +503,17 @@ function computeCorrectedErrorsOffset(offset, rowCount, total, pageSize) {
     return Math.max(0, offset - pageSize);
   }
   return null;
+}
+
+/**
+ * Pure offset computation for the Last-page button — mirrors the
+ * `computeErrorsPaginationState`/`computeCorrectedErrorsOffset` pattern.
+ * `total` is only known after at least one successful `loadErrors()`
+ * (`lastErrorsTotal`), same source the First/Last disabled state reads from.
+ */
+function computeLastPageOffset(total, pageSize) {
+  if (total <= 0) return 0;
+  return Math.floor((total - 1) / pageSize) * pageSize;
 }
 
 /**
@@ -563,8 +574,10 @@ function applyErrorsPaginationState(rowCount, total) {
     rowCount,
     total,
   );
+  document.getElementById("errors-first-button").disabled = prevDisabled;
   document.getElementById("errors-prev-button").disabled = prevDisabled;
   document.getElementById("errors-next-button").disabled = nextDisabled;
+  document.getElementById("errors-last-button").disabled = nextDisabled;
   document.getElementById("errors-page-indicator").textContent = indicatorText;
 }
 
@@ -578,8 +591,10 @@ function applyErrorsPaginationState(rowCount, total) {
  * operator can only have one of these requests in flight at a time.
  */
 function setErrorsControlsDisabled(disabled) {
+  document.getElementById("errors-first-button").disabled = disabled;
   document.getElementById("errors-prev-button").disabled = disabled;
   document.getElementById("errors-next-button").disabled = disabled;
+  document.getElementById("errors-last-button").disabled = disabled;
   document.getElementById("filter-button").disabled = disabled;
   document.getElementById("clear-filter-button").disabled = disabled;
 }
@@ -678,6 +693,123 @@ async function retryError(row) {
   }
 }
 
+/**
+ * Pure formatting function for the analytics table's "% of Total" column —
+ * mirrors `formatTimestamp`'s extraction pattern. `percentage` is already
+ * rounded to 1 decimal server-side (see `getErrorAnalytics` in
+ * importErrorRepo.ts); this just appends the "%" for display.
+ */
+function formatAnalyticsPercentage(percentage) {
+  return `${percentage.toFixed(1)}%`;
+}
+
+function renderAnalyticsTable(rows) {
+  const tbody = document.querySelector("#analytics-table tbody");
+  tbody.innerHTML = "";
+  for (const bucket of rows) {
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td>${escapeHtml(bucket.day)}</td>
+      <td>${escapeHtml(bucket.hour)}</td>
+      <td>${bucket.count}</td>
+      <td>${formatAnalyticsPercentage(bucket.percentage)}</td>
+    `;
+    tbody.appendChild(row);
+  }
+}
+
+/**
+ * Whole-table view (see `errors.html`'s Error Analytics section), so unlike
+ * `loadErrors()` it takes no filter/pagination params and never re-runs on
+ * Filter/Clear/Prev/Next/First/Last.
+ */
+async function loadAnalytics() {
+  const errorEl = document.getElementById("errors-error");
+  try {
+    const { ok, body } = await adminFetchJson("/admin/api/errors/analytics");
+    if (!ok) {
+      showError(errorEl, "Failed to load error analytics.");
+      return;
+    }
+    renderAnalyticsTable(body.data);
+  } catch (error) {
+    if (error.message !== "unauthenticated") {
+      console.error(error);
+      showError(errorEl, "Could not reach the server.");
+    }
+  }
+}
+
+/**
+ * Pure formatting function for the bulk-retry result summary — mirrors
+ * `formatRefreshCatalogResult`/`formatFullResetResult`'s extraction pattern.
+ * The all-zero case (no matching unresolved rows) needs no special-casing:
+ * it naturally reads "Retried 0 of 0 matching in 0 block(s) of 20: 0
+ * resolved, 0 still failing." `skippedCount` (rows resolved out from under
+ * the sweep by a concurrent single-row retry) and the "more remain" note
+ * (when a `BULK_RETRY_MAX_ROWS_PER_CALL` cap left rows unprocessed) are only
+ * appended when they apply.
+ */
+function formatBulkRetrySummary(summary) {
+  const { totalMatched, processedCount, resolvedCount, failedCount, skippedCount, blockCount, blockSize } = summary;
+  let text = `Retried ${processedCount} of ${totalMatched} matching in ${blockCount} block(s) of ${blockSize}: ${resolvedCount} resolved, ${failedCount} still failing`;
+  if (skippedCount > 0) text += `, ${skippedCount} skipped`;
+  text += ".";
+  if (totalMatched > processedCount) {
+    text += ` ${totalMatched - processedCount} remaining — click Retry Failed (Bulk) again to continue.`;
+  }
+  return text;
+}
+
+/**
+ * Bulk-retries every unresolved `import_errors` row matching the current
+ * runId/countryCode filter (the `resolved` filter value is ignored — the
+ * server always forces `resolved: false`, see `retryErrorsBulk` in
+ * controller.ts). One synchronous POST; the server processes everything in
+ * blocks before responding, so this call can take a while.
+ */
+async function bulkRetryErrors() {
+  const button = document.getElementById("bulk-retry-button");
+  const resultEl = document.getElementById("bulk-retry-result");
+  const errorEl = document.getElementById("errors-error");
+  hideError(errorEl);
+  const runId = document.getElementById("filter-run-id").value.trim();
+  const countryCode = document.getElementById("filter-country-code").value.trim();
+
+  const payload = {};
+  if (runId !== "") payload.runId = Number(runId);
+  if (countryCode !== "") payload.countryCode = countryCode;
+
+  resultEl.textContent = "Retrying...";
+  button.disabled = true;
+
+  try {
+    const { status, body } = await adminFetchJson("/admin/api/errors/retry-bulk", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    if (status === 409) {
+      resultEl.textContent = body?.error?.message ?? "A bulk retry could not be started.";
+      return;
+    }
+    if (status !== 200) {
+      resultEl.textContent = body?.error?.message ?? "Could not run the bulk retry.";
+      return;
+    }
+    resultEl.textContent = formatBulkRetrySummary(body.data);
+    errorsOffset = 0;
+    await loadErrors();
+    await loadAnalytics();
+  } catch (error) {
+    if (error.message !== "unauthenticated") {
+      console.error(error);
+      resultEl.textContent = "could not reach the server";
+    }
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function initErrorsPage() {
   document.getElementById("filter-button").addEventListener("click", () => {
     errorsOffset = 0;
@@ -690,6 +822,10 @@ function initErrorsPage() {
     errorsOffset = 0;
     loadErrors();
   });
+  document.getElementById("errors-first-button").addEventListener("click", () => {
+    errorsOffset = 0;
+    loadErrors();
+  });
   document.getElementById("errors-prev-button").addEventListener("click", () => {
     errorsOffset = Math.max(0, errorsOffset - ERRORS_PAGE_SIZE);
     loadErrors();
@@ -698,13 +834,19 @@ function initErrorsPage() {
     errorsOffset += ERRORS_PAGE_SIZE;
     loadErrors();
   });
+  document.getElementById("errors-last-button").addEventListener("click", () => {
+    errorsOffset = computeLastPageOffset(lastErrorsTotal, ERRORS_PAGE_SIZE);
+    loadErrors();
+  });
   document.querySelector("#errors-table tbody").addEventListener("click", (event) => {
     if (event.target.dataset.action !== "retry") return;
     const row = event.target.closest("tr");
     retryError(row);
   });
+  document.getElementById("bulk-retry-button").addEventListener("click", () => bulkRetryErrors());
 
   loadErrors();
+  loadAnalytics();
 }
 
 // ---------------------------------------------------------------------------
@@ -793,9 +935,12 @@ if (typeof module !== "undefined") {
     computeControlGating,
     formatRefreshCatalogResult,
     formatFullResetResult,
+    formatBulkRetrySummary,
     computeErrorsPaginationState,
     computeCorrectedErrorsOffset,
+    computeLastPageOffset,
     formatTimestamp,
+    formatAnalyticsPercentage,
     // `adminFetch` touches only `fetch`/`window.location`, never `document`,
     // so it's testable here without a DOM/jsdom dependency (see
     // test/public/app.test.ts) — used specifically to prove that a 403

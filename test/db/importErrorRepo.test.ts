@@ -10,6 +10,7 @@ import {
   getImportErrorById,
   markResolved,
   updateErrorReason,
+  getErrorAnalytics,
 } from "../../src/db/importErrorRepo.js";
 
 const migrationsDir = path.join(process.cwd(), "src", "migrations");
@@ -18,6 +19,11 @@ function freshDb(): Database.Database {
   const db = new Database(":memory:");
   migrate(db, migrationsDir);
   return db;
+}
+
+/** Backdates a row's created_at so getErrorAnalytics tests can control day/hour bucketing deterministically. */
+function setCreatedAt(db: Database.Database, id: number, isoString: string): void {
+  db.prepare(`UPDATE import_errors SET created_at = ? WHERE id = ?`).run(isoString, id);
 }
 
 describe("recordError", () => {
@@ -431,5 +437,90 @@ describe("updateErrorReason", () => {
     const db = freshDb();
 
     expect(updateErrorReason(db, 999999, "whatever")).toBeNull();
+  });
+});
+
+describe("getErrorAnalytics", () => {
+  it("returns an empty array for an empty table", () => {
+    const db = freshDb();
+
+    expect(getErrorAnalytics(db)).toEqual([]);
+  });
+
+  it("returns a single 100% bucket when every row falls in the same day+hour", () => {
+    const db = freshDb();
+    const run = createRun(db);
+    const first = recordError(db, {
+      runId: run.id,
+      countryCode: "ar",
+      recordOffset: 1,
+      recordIdentifier: null,
+      errorReason: "boom-1",
+    });
+    const second = recordError(db, {
+      runId: run.id,
+      countryCode: "ar",
+      recordOffset: 2,
+      recordIdentifier: null,
+      errorReason: "boom-2",
+    });
+    setCreatedAt(db, first.id, "2026-07-08T14:05:00.000Z");
+    setCreatedAt(db, second.id, "2026-07-08T14:55:00.000Z");
+
+    const buckets = getErrorAnalytics(db);
+
+    expect(buckets).toEqual([{ day: "2026-07-08", hour: "14", count: 2, percentage: 100 }]);
+  });
+
+  it("buckets by UTC day+hour across multiple runs/countries/resolved states, ordered day DESC then hour DESC", () => {
+    const db = freshDb();
+    const run1 = createRun(db);
+    const run2 = createRun(db);
+
+    const a = recordError(db, {
+      runId: run1.id,
+      countryCode: "ar",
+      recordOffset: 1,
+      recordIdentifier: null,
+      errorReason: "boom-a",
+    });
+    const b = recordError(db, {
+      runId: run2.id,
+      countryCode: "cl",
+      recordOffset: 2,
+      recordIdentifier: null,
+      errorReason: "boom-b",
+    });
+    const c = recordError(db, {
+      runId: run1.id,
+      countryCode: "ar",
+      recordOffset: 3,
+      recordIdentifier: null,
+      errorReason: "boom-c",
+    });
+    const d = recordError(db, {
+      runId: run2.id,
+      countryCode: "co",
+      recordOffset: 4,
+      recordIdentifier: null,
+      errorReason: "boom-d",
+    });
+    // Same UTC day+hour as `a`, different run/country/resolved — must still
+    // count together since this endpoint is an unfiltered whole-table view.
+    setCreatedAt(db, a.id, "2026-07-08T09:10:00.000Z");
+    markResolved(db, a.id);
+    setCreatedAt(db, b.id, "2026-07-08T09:40:00.000Z");
+    setCreatedAt(db, c.id, "2026-07-08T14:00:00.000Z");
+    setCreatedAt(db, d.id, "2026-07-09T00:00:00.000Z");
+
+    const buckets = getErrorAnalytics(db);
+
+    expect(buckets).toEqual([
+      { day: "2026-07-09", hour: "00", count: 1, percentage: 25 },
+      { day: "2026-07-08", hour: "14", count: 1, percentage: 25 },
+      { day: "2026-07-08", hour: "09", count: 2, percentage: 50 },
+    ]);
+    const totalPercentage = buckets.reduce((sum, bucket) => sum + bucket.percentage, 0);
+    expect(totalPercentage).toBeCloseTo(100, 5);
   });
 });

@@ -37,6 +37,12 @@ const errorIdParamSchema = z.object({
   id: z.coerce.number().int().positive(),
 });
 
+/** JSON body (not query-string params), so no `z.coerce` unlike `errorsQuerySchema`. */
+const bulkRetryBodySchema = z.object({
+  runId: z.number().int().positive().optional(),
+  countryCode: z.string().min(1).optional(),
+});
+
 function validationError(message: string): { error: { code: string; message: string } } {
   return { error: { code: "validation_error", message } };
 }
@@ -160,6 +166,10 @@ export function registerAdminBffRoutes(
     return reply.send({ data: rows, total });
   });
 
+  fastify.get("/admin/api/errors/analytics", async (_request, reply) => {
+    return reply.send({ data: controller.getErrorAnalytics() });
+  });
+
   fastify.post("/admin/api/errors/:id/retry", async (request, reply) => {
     const parsedParams = errorIdParamSchema.safeParse(request.params);
     if (!parsedParams.success) {
@@ -197,6 +207,27 @@ export function registerAdminBffRoutes(
           data: { outcome: "failed", importError: outcome.importError, reason: outcome.reason },
         });
     }
+  });
+
+  fastify.post("/admin/api/errors/retry-bulk", async (request, reply) => {
+    const parsedBody = bulkRetryBodySchema.safeParse(request.body ?? {});
+    if (!parsedBody.success) {
+      return reply.code(400).send(validationError(parsedBody.error.message));
+    }
+
+    const outcome = await controller.retryErrorsBulk(parsedBody.data);
+    if (outcome.outcome === "conflict") {
+      request.log.warn(
+        { route: "POST /admin/api/errors/retry-bulk", reason: outcome.message },
+        "admin bulk error retry failed",
+      );
+      return reply.code(409).send(conflictError(outcome.message));
+    }
+    request.log.info(
+      { route: "POST /admin/api/errors/retry-bulk", filter: parsedBody.data, summary: outcome.summary },
+      "admin bulk error retry completed",
+    );
+    return reply.send({ data: outcome.summary });
   });
 
   fastify.post("/admin/api/migration/start", async (request, reply) => {

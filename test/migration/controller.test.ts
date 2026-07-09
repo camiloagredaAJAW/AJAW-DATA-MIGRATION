@@ -118,6 +118,50 @@ describe("createMigrationController", () => {
 
       expect(result.outcome).toBe("conflict");
     });
+
+    it("returns a conflict when a bulk retry is in progress, without starting a run", async () => {
+      const db = freshDb();
+      const run = createRun(db);
+      updateRunStatus(db, run.id, "stopped");
+      recordError(db, {
+        runId: run.id,
+        countryCode: "AR",
+        recordOffset: 1,
+        recordIdentifier: null,
+        errorReason: "boom",
+      });
+
+      // Deferred gate: holds the bulk retry's leads re-fetch open so `start()`
+      // can be called while the bulk retry is still mid-flight — mirrors the
+      // concurrent-bulk-retry test in the `retryErrorsBulk` describe block.
+      let releaseFetch: () => void = () => {};
+      const fetchGate = new Promise<void>((resolve) => {
+        releaseFetch = resolve;
+      });
+      const leadsFetchImpl = vi.fn().mockImplementation(async () => {
+        await fetchGate;
+        throw new Error("no such record");
+      });
+      const deps: MigrationControllerDeps = {
+        db,
+        leadsConfig: { ...fakeLeadsConfig(), fetchImpl: leadsFetchImpl as unknown as typeof fetch },
+        axelorConfig: fakeAxelorConfig(),
+        pageLimit: 100,
+        session: fakeSession(),
+      };
+      const controller = createMigrationController(db, deps, { runMigrationFn: resolvedRunMigrationFn() });
+
+      const bulkRetry = controller.retryErrorsBulk({ runId: run.id });
+      await flushMicrotasks();
+
+      const startResult = controller.start();
+
+      expect(startResult.outcome).toBe("conflict");
+      expect(getActiveRun(db)).toBeNull();
+
+      releaseFetch();
+      await bulkRetry;
+    });
   });
 
   describe("pause", () => {
@@ -278,6 +322,27 @@ describe("createMigrationController", () => {
 
       expect(rows).toHaveLength(2);
       expect(total).toBe(5);
+    });
+  });
+
+  describe("getErrorAnalytics", () => {
+    it("delegates to the getErrorAnalytics repo function", () => {
+      const db = freshDb();
+      const run = createRun(db);
+      recordError(db, {
+        runId: run.id,
+        countryCode: "ar",
+        recordOffset: 10,
+        recordIdentifier: "ACME",
+        errorReason: "boom",
+      });
+      const controller = createMigrationController(db, fakeDeps(db));
+
+      const buckets = controller.getErrorAnalytics();
+
+      expect(buckets).toHaveLength(1);
+      expect(buckets[0]?.count).toBe(1);
+      expect(buckets[0]?.percentage).toBe(100);
     });
   });
 
@@ -546,6 +611,344 @@ describe("createMigrationController", () => {
       // the concurrency guard — it short-circuits on `already_resolved`.
       const thirdOutcome = await controller.retry(errorRow.id);
       expect(thirdOutcome.outcome).toBe("already_resolved");
+    });
+  });
+
+  describe("retryErrorsBulk", () => {
+    it("processes every unresolved row matching the filter and reports resolved/failed counts", async () => {
+      const db = freshDb();
+      seedTitleMapping(db, "AR");
+      const run = createRun(db);
+      updateRunStatus(db, run.id, "stopped");
+      const checkpoint = upsertCheckpoint(db, run.id, "AR");
+      setAiSearchId(db, checkpoint.id, 999);
+      const succeeding = recordError(db, {
+        runId: run.id,
+        countryCode: "AR",
+        recordOffset: 5,
+        recordIdentifier: "ACME",
+        errorReason: "boom",
+      });
+      const failing = recordError(db, {
+        runId: run.id,
+        countryCode: "AR",
+        recordOffset: 6,
+        recordIdentifier: "OTHER",
+        errorReason: "boom-2",
+      });
+
+      const leadsFetchImpl = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes("offset=5")) return textResponse(`{"legal_name":"ACME"}`);
+        throw new Error("simulated leads failure");
+      });
+      const axelorFetchImpl = vi.fn().mockResolvedValue(jsonResponse({ status: 0, data: [{ id: 555 }] }));
+      const deps: MigrationControllerDeps = {
+        db,
+        leadsConfig: { ...fakeLeadsConfig(), fetchImpl: leadsFetchImpl as unknown as typeof fetch },
+        axelorConfig: fakeAxelorConfig(),
+        pageLimit: 100,
+        session: fakeSession(),
+        fetchImpl: axelorFetchImpl as unknown as typeof fetch,
+      };
+      const controller = createMigrationController(db, deps);
+
+      const outcome = await controller.retryErrorsBulk({ runId: run.id });
+
+      expect(outcome.outcome).toBe("completed");
+      if (outcome.outcome === "completed") {
+        expect(outcome.summary.totalMatched).toBe(2);
+        expect(outcome.summary.processedCount).toBe(2);
+        expect(outcome.summary.resolvedCount).toBe(1);
+        expect(outcome.summary.failedCount).toBe(1);
+        expect(outcome.summary.skippedCount).toBe(0);
+        expect(outcome.summary.blockSize).toBe(20);
+        expect(outcome.summary.blockCount).toBe(1);
+        expect(
+          outcome.summary.resolvedCount + outcome.summary.failedCount + outcome.summary.skippedCount,
+        ).toBe(outcome.summary.processedCount);
+      }
+      expect(succeeding.id).not.toBe(failing.id);
+    });
+
+    it("batches into multiple blocks when more than BULK_RETRY_BLOCK_SIZE rows match", async () => {
+      const db = freshDb();
+      const run = createRun(db);
+      updateRunStatus(db, run.id, "stopped");
+      for (let i = 0; i < 25; i++) {
+        recordError(db, {
+          runId: run.id,
+          countryCode: "AR",
+          recordOffset: i,
+          recordIdentifier: null,
+          errorReason: `boom-${i}`,
+        });
+      }
+      const leadsFetchImpl = vi.fn().mockRejectedValue(new Error("no such record"));
+      const deps: MigrationControllerDeps = {
+        db,
+        leadsConfig: { ...fakeLeadsConfig(), fetchImpl: leadsFetchImpl as unknown as typeof fetch },
+        axelorConfig: fakeAxelorConfig(),
+        pageLimit: 100,
+        session: fakeSession(),
+      };
+      const controller = createMigrationController(db, deps);
+
+      const outcome = await controller.retryErrorsBulk({ runId: run.id });
+
+      expect(outcome.outcome).toBe("completed");
+      if (outcome.outcome === "completed") {
+        expect(outcome.summary.totalMatched).toBe(25);
+        expect(outcome.summary.processedCount).toBe(25);
+        expect(outcome.summary.resolvedCount).toBe(0);
+        expect(outcome.summary.failedCount).toBe(25);
+        expect(outcome.summary.skippedCount).toBe(0);
+        expect(outcome.summary.blockSize).toBe(20);
+        expect(outcome.summary.blockCount).toBe(2);
+      }
+    });
+
+    it("never touches already-resolved rows even if a resolved-like value were passed", async () => {
+      const db = freshDb();
+      const run = createRun(db);
+      updateRunStatus(db, run.id, "stopped");
+      const unresolved = recordError(db, {
+        runId: run.id,
+        countryCode: "AR",
+        recordOffset: 1,
+        recordIdentifier: null,
+        errorReason: "boom",
+      });
+      const resolvedRow = recordError(db, {
+        runId: run.id,
+        countryCode: "AR",
+        recordOffset: 2,
+        recordIdentifier: null,
+        errorReason: "boom-2",
+      });
+      markResolved(db, resolvedRow.id);
+      const leadsFetchImpl = vi.fn().mockRejectedValue(new Error("no such record"));
+      const deps: MigrationControllerDeps = {
+        db,
+        leadsConfig: { ...fakeLeadsConfig(), fetchImpl: leadsFetchImpl as unknown as typeof fetch },
+        axelorConfig: fakeAxelorConfig(),
+        pageLimit: 100,
+        session: fakeSession(),
+      };
+      const controller = createMigrationController(db, deps);
+
+      const outcome = await controller.retryErrorsBulk({ runId: run.id });
+
+      expect(outcome.outcome).toBe("completed");
+      if (outcome.outcome === "completed") {
+        expect(outcome.summary.totalMatched).toBe(1);
+      }
+      expect(leadsFetchImpl).toHaveBeenCalledTimes(1);
+      expect(unresolved.id).not.toBe(resolvedRow.id);
+    });
+
+    it("returns a conflict when the active run is running", async () => {
+      const db = freshDb();
+      createRun(db); // createRun defaults to status='running'.
+      const controller = createMigrationController(db, fakeDeps(db));
+
+      const outcome = await controller.retryErrorsBulk({});
+
+      expect(outcome.outcome).toBe("conflict");
+    });
+
+    it("does NOT return a conflict when the active run is paused — processes normally", async () => {
+      const db = freshDb();
+      const run = createRun(db);
+      updateRunStatus(db, run.id, "paused");
+      recordError(db, {
+        runId: run.id,
+        countryCode: "AR",
+        recordOffset: 1,
+        recordIdentifier: null,
+        errorReason: "boom",
+      });
+      const leadsFetchImpl = vi.fn().mockRejectedValue(new Error("no such record"));
+      const deps: MigrationControllerDeps = {
+        db,
+        leadsConfig: { ...fakeLeadsConfig(), fetchImpl: leadsFetchImpl as unknown as typeof fetch },
+        axelorConfig: fakeAxelorConfig(),
+        pageLimit: 100,
+        session: fakeSession(),
+      };
+      const controller = createMigrationController(db, deps);
+
+      const outcome = await controller.retryErrorsBulk({ runId: run.id });
+
+      expect(outcome.outcome).toBe("completed");
+      if (outcome.outcome === "completed") {
+        expect(outcome.summary.totalMatched).toBe(1);
+      }
+    });
+
+    it("rejects a concurrent bulk retry while one is already in flight", async () => {
+      const db = freshDb();
+      const run = createRun(db);
+      updateRunStatus(db, run.id, "stopped");
+      recordError(db, {
+        runId: run.id,
+        countryCode: "AR",
+        recordOffset: 1,
+        recordIdentifier: null,
+        errorReason: "boom",
+      });
+
+      // Deferred gate: holds the first bulk retry's leads re-fetch open so a
+      // second call can be issued while the first is still mid-flight,
+      // forcing the race deterministically — mirrors the concurrent-reset
+      // test above.
+      let releaseFetch: () => void = () => {};
+      const fetchGate = new Promise<void>((resolve) => {
+        releaseFetch = resolve;
+      });
+      const leadsFetchImpl = vi.fn().mockImplementation(async () => {
+        await fetchGate;
+        throw new Error("no such record");
+      });
+      const deps: MigrationControllerDeps = {
+        db,
+        leadsConfig: { ...fakeLeadsConfig(), fetchImpl: leadsFetchImpl as unknown as typeof fetch },
+        axelorConfig: fakeAxelorConfig(),
+        pageLimit: 100,
+        session: fakeSession(),
+      };
+      const controller = createMigrationController(db, deps);
+
+      const firstBulkRetry = controller.retryErrorsBulk({ runId: run.id });
+      await flushMicrotasks();
+
+      const secondOutcome = await controller.retryErrorsBulk({ runId: run.id });
+
+      expect(secondOutcome.outcome).toBe("conflict");
+
+      releaseFetch();
+      const firstOutcome = await firstBulkRetry;
+
+      expect(firstOutcome.outcome).toBe("completed");
+      if (firstOutcome.outcome === "completed") {
+        expect(firstOutcome.summary.totalMatched).toBe(1);
+        expect(firstOutcome.summary.failedCount).toBe(1);
+      }
+    });
+
+    it("returns a completed all-zero summary when no unresolved rows match the filter", async () => {
+      const db = freshDb();
+      const controller = createMigrationController(db, fakeDeps(db));
+
+      const outcome = await controller.retryErrorsBulk({ runId: 999999 });
+
+      expect(outcome.outcome).toBe("completed");
+      if (outcome.outcome === "completed") {
+        expect(outcome.summary).toEqual({
+          totalMatched: 0,
+          processedCount: 0,
+          resolvedCount: 0,
+          failedCount: 0,
+          skippedCount: 0,
+          blockSize: 20,
+          blockCount: 0,
+        });
+      }
+    });
+
+    it("counts a row resolved by a concurrent single-row retry mid-sweep as skipped, not failed", async () => {
+      const db = freshDb();
+      seedTitleMapping(db, "AR");
+      const run = createRun(db);
+      updateRunStatus(db, run.id, "stopped");
+      const checkpoint = upsertCheckpoint(db, run.id, "AR");
+      setAiSearchId(db, checkpoint.id, 999);
+      const first = recordError(db, {
+        runId: run.id,
+        countryCode: "AR",
+        recordOffset: 1,
+        recordIdentifier: null,
+        errorReason: "boom-1",
+      });
+      const second = recordError(db, {
+        runId: run.id,
+        countryCode: "AR",
+        recordOffset: 2,
+        recordIdentifier: null,
+        errorReason: "boom-2",
+      });
+
+      // Fires when the sweep reaches the FIRST row's leads re-fetch: marks
+      // the SECOND row resolved out from under the sweep (simulating a
+      // concurrent single-row `/admin/api/errors/:id/retry` that races ahead
+      // of the bulk sweep reaching that row), then fails the first row's own
+      // retry so its own outcome stays deterministic.
+      const leadsFetchImpl = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes("offset=1")) {
+          markResolved(db, second.id);
+          throw new Error("simulated leads failure for row 1");
+        }
+        throw new Error("simulated leads failure");
+      });
+      const deps: MigrationControllerDeps = {
+        db,
+        leadsConfig: { ...fakeLeadsConfig(), fetchImpl: leadsFetchImpl as unknown as typeof fetch },
+        axelorConfig: fakeAxelorConfig(),
+        pageLimit: 100,
+        session: fakeSession(),
+      };
+      const controller = createMigrationController(db, deps);
+
+      const outcome = await controller.retryErrorsBulk({ runId: run.id });
+
+      expect(outcome.outcome).toBe("completed");
+      if (outcome.outcome === "completed") {
+        expect(outcome.summary.totalMatched).toBe(2);
+        expect(outcome.summary.processedCount).toBe(2);
+        expect(outcome.summary.failedCount).toBe(1);
+        expect(outcome.summary.skippedCount).toBe(1);
+        expect(outcome.summary.resolvedCount).toBe(0);
+        expect(
+          outcome.summary.resolvedCount + outcome.summary.failedCount + outcome.summary.skippedCount,
+        ).toBe(outcome.summary.processedCount);
+      }
+      expect(first.id).not.toBe(second.id);
+    });
+
+    it("caps processing at BULK_RETRY_MAX_ROWS_PER_CALL while totalMatched reflects the true uncapped count", async () => {
+      const db = freshDb();
+      const run = createRun(db);
+      updateRunStatus(db, run.id, "stopped");
+      for (let i = 0; i < 250; i++) {
+        recordError(db, {
+          runId: run.id,
+          countryCode: "AR",
+          recordOffset: i,
+          recordIdentifier: null,
+          errorReason: `boom-${i}`,
+        });
+      }
+      const leadsFetchImpl = vi.fn().mockRejectedValue(new Error("no such record"));
+      const deps: MigrationControllerDeps = {
+        db,
+        leadsConfig: { ...fakeLeadsConfig(), fetchImpl: leadsFetchImpl as unknown as typeof fetch },
+        axelorConfig: fakeAxelorConfig(),
+        pageLimit: 100,
+        session: fakeSession(),
+      };
+      const controller = createMigrationController(db, deps);
+
+      const outcome = await controller.retryErrorsBulk({ runId: run.id });
+
+      expect(outcome.outcome).toBe("completed");
+      if (outcome.outcome === "completed") {
+        expect(outcome.summary.totalMatched).toBe(250);
+        expect(outcome.summary.processedCount).toBe(200);
+        expect(outcome.summary.failedCount).toBe(200);
+        expect(outcome.summary.resolvedCount).toBe(0);
+        expect(outcome.summary.skippedCount).toBe(0);
+        expect(outcome.summary.blockCount).toBe(10);
+      }
+      expect(leadsFetchImpl).toHaveBeenCalledTimes(200);
     });
   });
 });

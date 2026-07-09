@@ -21,6 +21,8 @@ All four PRD slices are implemented. The migration tool is usable end-to-end: bo
 
 > **Admin UI polish (2026-07-08).** The dashboard now auto-refreshes every 10s (plus a manual Refresh button below "Per-Country Progress"); the Errors table shows each failure's timestamp; `source_catalog` has its own page (`/admin/catalog.html`, `GET /admin/api/catalog`) instead of only a blind refresh button; and "Reset Everything" stays collapsed behind a reveal button (with a Cancel to close it again) instead of sitting open on the dashboard by default.
 
+> **Errors page: pagination, analytics, bulk retry (2026-07-09).** The Errors table now has First/Last controls alongside Prev/Next and pages 100 rows at a time (up from 50). A new "Error Analytics" table breaks down error counts by UTC day/hour with each bucket's share of the total (`GET /admin/api/errors/analytics`). A "Retry Failed (Bulk)" button (`POST /admin/api/errors/retry-bulk`) retries every unresolved error matching the current runId/countryCode filter, in blocks of 20, up to 200 rows per call (click again to continue past that cap) — it's rejected with a 409 while a migration run is actively `running` (pausing first is fine) or while another bulk retry is already in flight, and a migration `start()` is likewise rejected while a bulk retry is running. On the dashboard, "Reset Everything" now matches the plain-heading style of the other sections and only shows its confirmation box after clicking the (now shorter) "Reset" button.
+
 ## Stack
 
 Node.js + TypeScript, `better-sqlite3` (operational SQLite state — never a copy of lead data), Fastify, Vitest (Strict TDD — tests are written before implementation).

@@ -33,6 +33,11 @@
       <button id="clear-filter-button">Clear</button>
     </div>
 
+    <div class="controls-row">
+      <button id="bulk-retry-button">Retry Failed (Bulk)</button>
+      <span id="bulk-retry-result" class="muted"></span>
+    </div>
+
     <table id="errors-table">
       <thead>
         <tr>
@@ -51,10 +56,26 @@
     </table>
 
     <div class="controls-row">
+      <button id="errors-first-button" disabled>First</button>
       <button id="errors-prev-button" disabled>Prev</button>
       <button id="errors-next-button" disabled>Next</button>
+      <button id="errors-last-button" disabled>Last</button>
       <span id="errors-page-indicator" class="muted"></span>
     </div>
+
+    <h2>Error Analytics</h2>
+    <p class="muted">Error counts by day and hour (UTC), and what share of all logged errors each bucket represents. This is a whole-table view, independent of the filters above.</p>
+    <table id="analytics-table">
+      <thead>
+        <tr>
+          <th>Day</th>
+          <th>Hour</th>
+          <th>Count</th>
+          <th>% of Total</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
   </main>
 
   <script src="/admin/app.js"></script>

@@ -498,6 +498,58 @@ describe("GET /admin/api/errors", () => {
   });
 });
 
+describe("GET /admin/api/errors/analytics", () => {
+  it("returns the whole-table day/hour error breakdown, ignoring runId/countryCode/resolved", async () => {
+    const db = freshDb();
+    const run = createRun(db);
+    const first = recordError(db, {
+      runId: run.id,
+      countryCode: "ar",
+      recordOffset: 1,
+      recordIdentifier: null,
+      errorReason: "boom-1",
+    });
+    const second = recordError(db, {
+      runId: run.id,
+      countryCode: "cl",
+      recordOffset: 2,
+      recordIdentifier: null,
+      errorReason: "boom-2",
+    });
+    markResolved(db, second.id);
+    db.prepare(`UPDATE import_errors SET created_at = ? WHERE id = ?`).run(
+      "2026-07-08T14:05:00.000Z",
+      first.id,
+    );
+    db.prepare(`UPDATE import_errors SET created_at = ? WHERE id = ?`).run(
+      "2026-07-08T14:55:00.000Z",
+      second.id,
+    );
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/admin/api/errors/analytics",
+      headers: adminGetHeaders(cookie),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      data: [{ day: "2026-07-08", hour: "14", count: 2, percentage: 100 }],
+    });
+  });
+
+  it("rejects requests without an authenticated session", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+
+    const response = await server.inject({ method: "GET", url: "/admin/api/errors/analytics" });
+
+    expect(response.statusCode).toBe(401);
+  });
+});
+
 describe("POST /admin/api/errors/:id/retry", () => {
   it("returns 404 for a nonexistent error id", async () => {
     const db = freshDb();
@@ -632,6 +684,132 @@ describe("POST /admin/api/errors/:id/retry", () => {
       method: "POST",
       url: "/admin/api/errors/1/retry",
       headers: { cookie },
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+});
+
+describe("POST /admin/api/errors/retry-bulk", () => {
+  it("returns 200 with a summary when the bulk retry completes", async () => {
+    const db = freshDb();
+    seedTitleMapping(db, "AR");
+    const run = createRun(db);
+    updateRunStatus(db, run.id, "stopped");
+    const checkpoint = upsertCheckpoint(db, run.id, "AR");
+    setAiSearchId(db, checkpoint.id, 999);
+    recordError(db, {
+      runId: run.id,
+      countryCode: "AR",
+      recordOffset: 5,
+      recordIdentifier: "ACME",
+      errorReason: "boom",
+    });
+
+    const leadsFetchImpl = async () => textResponse(`{"legal_name":"ACME"}`);
+    const axelorFetchImpl = async () => jsonResponse({ status: 0, data: [{ id: 555 }] });
+    const deps: MigrationControlDeps = {
+      db,
+      leadsConfig: { ...fakeLeadsConfig(), fetchImpl: leadsFetchImpl as unknown as typeof fetch },
+      axelorConfig: fakeAxelorConfig(),
+      pageLimit: 100,
+      session: fakeSession(),
+      fetchImpl: axelorFetchImpl as unknown as typeof fetch,
+    };
+    const server = buildServer({ db, authConfig, migrationDeps: deps });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/api/errors/retry-bulk",
+      headers: adminMutateHeaders(cookie),
+      payload: { runId: run.id },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json().data;
+    expect(body).toEqual({
+      totalMatched: 1,
+      processedCount: 1,
+      resolvedCount: 1,
+      failedCount: 0,
+      skippedCount: 0,
+      blockSize: 20,
+      blockCount: 1,
+    });
+  });
+
+  it("returns 409 with the conflictError shape when a migration run is active", async () => {
+    const db = freshDb();
+    createRun(db); // createRun defaults to status='running', i.e. active.
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/api/errors/retry-bulk",
+      headers: adminMutateHeaders(cookie),
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.code).toBe("conflict");
+  });
+
+  it("returns 400 for an invalid body (runId not a positive number)", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/api/errors/retry-bulk",
+      headers: adminMutateHeaders(cookie),
+      payload: { runId: -1 },
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("returns 400 for an empty-string countryCode", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/api/errors/retry-bulk",
+      headers: adminMutateHeaders(cookie),
+      payload: { countryCode: "" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe("validation_error");
+  });
+
+  it("rejects a bulk retry without an authenticated session", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/api/errors/retry-bulk",
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("rejects a bulk retry missing the CSRF header even with a valid session", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/admin/api/errors/retry-bulk",
+      headers: { cookie },
+      payload: {},
     });
 
     expect(response.statusCode).toBe(403);

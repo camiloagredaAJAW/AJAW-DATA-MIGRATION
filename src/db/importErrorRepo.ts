@@ -194,3 +194,44 @@ export function updateErrorReason(
 
   return getImportErrorById(db, id);
 }
+
+export interface ErrorAnalyticsBucket {
+  readonly day: string;
+  readonly hour: string;
+  readonly count: number;
+  readonly percentage: number;
+}
+
+/**
+ * Whole-table breakdown of import_errors by UTC day+hour bucket — unlike
+ * `listImportErrors`/`countImportErrors`, this ignores runId/countryCode/
+ * resolved filters entirely, since it answers "when do errors happen"
+ * rather than "how many in the current filtered view". Ordered most-recent
+ * bucket first (day DESC, hour DESC). `percentage` is computed in JS (not
+ * SQL) to avoid floating-point drift, rounded to 1 decimal place.
+ */
+export function getErrorAnalytics(db: Database.Database): ErrorAnalyticsBucket[] {
+  const rows = db
+    .prepare(`
+      SELECT
+        strftime('%Y-%m-%d', created_at) AS day,
+        strftime('%H', created_at) AS hour,
+        COUNT(*) AS count
+      FROM import_errors
+      GROUP BY day, hour
+      ORDER BY day DESC, hour DESC
+    `)
+    .all() as { day: string; hour: string; count: number }[];
+
+  const total = rows.reduce((sum, row) => sum + row.count, 0);
+  if (total === 0) {
+    return [];
+  }
+
+  return rows.map((row) => ({
+    day: row.day,
+    hour: row.hour,
+    count: row.count,
+    percentage: Math.round((row.count / total) * 100 * 10) / 10,
+  }));
+}
