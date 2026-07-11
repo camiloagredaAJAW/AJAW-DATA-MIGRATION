@@ -11,10 +11,10 @@
   </script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Field Mappings — Ajaw Data Migration Admin</title>
+  <title>Analytics — Ajaw Data Migration Admin</title>
   <link rel="stylesheet" href="/admin/style.css" />
 </head>
-<body data-page="mappings">
+<body data-page="analytics">
   <header class="app-header">
     <nav>
       <a href="/admin/dashboard.html">Dashboard</a>
@@ -30,26 +30,30 @@
   </header>
 
   <main>
-    <h1>Field Mappings</h1>
-    <p id="mappings-error" class="error-banner" hidden></p>
+    <h1>Analytics</h1>
+    <!--
+      `loadAnalytics()` in app.js hardcodes `document.getElementById("errors-error")`
+      for its error banner (unchanged from when this section lived on
+      errors.html — see the Task 2 brief: "no logic changes to them, just
+      re-wire which page-init function calls them"). This element must keep
+      that exact id so a failed analytics fetch still surfaces visibly here
+      instead of being silently swallowed by showError/hideError's
+      `element === null` no-op guard.
+    -->
+    <p id="errors-error" class="error-banner" hidden></p>
 
-    <div class="filters-row">
-      <input type="text" id="filter-source-db" placeholder="source_db" />
-      <input type="text" id="filter-source-table" placeholder="source_table" />
-      <button id="filter-button">Filter</button>
-      <button id="clear-filter-button">Clear</button>
+    <h2>Error Analytics</h2>
+    <p class="muted">Error counts by hour for the selected day (UTC), and each hour's share of that day's total errors.</p>
+    <div class="controls-row">
+      <label for="analytics-day-filter">Day:</label>
+      <input type="date" id="analytics-day-filter" />
     </div>
-
-    <table id="mappings-table">
+    <table id="analytics-table">
       <thead>
         <tr>
-          <th>Source DB</th>
-          <th>Source Table</th>
-          <th>Source Column</th>
-          <th>Destination Field</th>
-          <th>Transform</th>
-          <th>Origin</th>
-          <th></th>
+          <th>Hour</th>
+          <th>Count</th>
+          <th>% of Day Total</th>
         </tr>
       </thead>
       <tbody></tbody>

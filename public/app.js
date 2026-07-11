@@ -95,6 +95,75 @@ function wireLogout() {
   });
 }
 
+const VALID_THEMES = new Set(["light", "dark"]);
+
+/**
+ * Reads the persisted theme preference, falling back to the OS-level
+ * `prefers-color-scheme` media query when nothing (or an invalid value) is
+ * stored. Touches only `window.localStorage`/`window.matchMedia` — never
+ * `document` — so, like `adminFetch` above, it's testable under plain Node
+ * with a minimal `window` mock instead of a jsdom dependency (see
+ * test/public/app.test.ts). The identical inline script at the top of every
+ * page's `<head>` duplicates this exact logic synchronously (before
+ * `app.js` even loads) purely to avoid a flash of the wrong theme on first
+ * paint; keep the two in sync if this logic ever changes.
+ */
+function getStoredTheme() {
+  const stored = window.localStorage.getItem("theme");
+  if (VALID_THEMES.has(stored)) return stored;
+  return window.matchMedia !== undefined &&
+    window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
+}
+
+/**
+ * Applies a theme: sets `<html data-theme="...">` (the hook `style.css` keys
+ * `:root[data-theme="dark"]` off of), persists it to `localStorage`, and —
+ * when a theme-toggle button exists on the current page — updates its label
+ * to name the theme a click will switch TO (e.g. "Dark mode" while
+ * currently light). Touches only `document.documentElement`/
+ * `document.getElementById` and `window.localStorage`, so like `adminFetch`
+ * it's testable with a minimal mock rather than a full jsdom tree (see
+ * test/public/app.test.ts).
+ */
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  window.localStorage.setItem("theme", theme);
+  const button = document.getElementById("theme-toggle-button");
+  if (button !== null) {
+    button.textContent = theme === "dark" ? "Light mode" : "Dark mode";
+  }
+}
+
+/**
+ * Wires the theme-toggle button, guarded the same way every other `wireX`-
+ * style function in this file null-checks its element first — `login.html`
+ * loads no toggle button (it doesn't load app.js at all), and this guard
+ * keeps the function safe to call unconditionally from `init()` regardless.
+ */
+function initTheme() {
+  const button = document.getElementById("theme-toggle-button");
+  if (button === null) return;
+  applyTheme(getStoredTheme());
+  button.addEventListener("click", () => {
+    const current = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+    applyTheme(current === "dark" ? "light" : "dark");
+  });
+}
+
+/**
+ * Highlights the `<nav>` link matching the current page with an `.active`
+ * class — `data-page` on `<body>` maps 1:1 to each page's HTML filename
+ * (dashboard/mappings/catalog/errors/analytics). Purely presentational.
+ */
+function markActiveNavLink() {
+  const page = document.body.dataset.page;
+  if (page === undefined) return;
+  const link = document.querySelector(`nav a[href$="/${page}.html"]`);
+  if (link !== null) link.classList.add("active");
+}
+
 // ---------------------------------------------------------------------------
 // Dashboard
 // ---------------------------------------------------------------------------
@@ -444,12 +513,378 @@ function initDashboardPage() {
   document.getElementById("reset-password-input").addEventListener("input", updateResetButtonState);
   document.getElementById("reset-everything-button").addEventListener("click", resetEverything);
 
+  document.getElementById("chart-granularity-day").addEventListener("click", () => setChartGranularity("day"));
+  document.getElementById("chart-granularity-week").addEventListener("click", () => setChartGranularity("week"));
+
   loadDashboard();
+  loadRecordsChart();
   // Auto-refresh so the dashboard stays current without a manual reload —
   // `loadDashboard()` is a read-only GET already called repeatedly elsewhere
   // in this codebase (e.g. after every control action) with no in-flight
   // guard, so an occasional overlapping poll here is an accepted pattern.
-  setInterval(loadDashboard, 10000);
+  // `loadRecordsChart()` rides the same 10-second interval rather than
+  // getting a second one of its own.
+  setInterval(() => {
+    loadDashboard();
+    loadRecordsChart();
+  }, 10000);
+}
+
+// ---------------------------------------------------------------------------
+// Saved vs Error Records chart (dashboard)
+// ---------------------------------------------------------------------------
+
+let chartGranularity = "day";
+
+const CHART_MONTH_LABELS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/**
+ * Pure formatter for the chart's x-axis labels — deliberately parses the
+ * `YYYY-MM-DD` string by splitting rather than via `new Date(...)`, so it
+ * can't be shifted by the reader's local timezone (the period is already a
+ * plain calendar date, not an instant). `granularity === "week"` periods are
+ * that ISO week's Monday (see the `/admin/api/analytics/daily` contract),
+ * prefixed accordingly. Extracted so it's unit-testable without a DOM — see
+ * test/public/app.test.ts.
+ */
+function formatChartPeriodLabel(period, granularity) {
+  const [, monthStr, dayStr] = period.split("-");
+  const monthLabel = CHART_MONTH_LABELS[Number(monthStr) - 1] ?? monthStr;
+  const base = `${monthLabel} ${dayStr}`;
+  return granularity === "week" ? `Wk of ${base}` : base;
+}
+
+// "Nice" tick-step candidates, tried smallest-first — mirrors the classic
+// d3/chart-library "nice numbers" approach (1/2/5 per decade).
+const CHART_NICE_STEPS = [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000];
+
+/**
+ * Pure scale/tick computation for the chart's y-axis — extracted so it's
+ * unit-testable without a DOM (see test/public/app.test.ts). Targets ~4
+ * gridline intervals above the tallest stacked (`saved + error`) total,
+ * snapped up to the smallest "nice" step (1/2/5 per decade) that keeps the
+ * tick count reasonable, then rounds `niceMax` up to a whole multiple of
+ * that step so the tallest bar never touches (or exceeds) the top gridline.
+ * An all-zero (or empty) dataset returns a single `0` tick rather than
+ * dividing by a zero step.
+ */
+function computeChartScale(data) {
+  const maxTotal = data.reduce((max, entry) => Math.max(max, entry.saved + entry.error), 0);
+  if (maxTotal <= 0) {
+    return { niceMax: 0, tickValues: [0] };
+  }
+  const targetStep = maxTotal / 4;
+  const step =
+    CHART_NICE_STEPS.find((candidate) => candidate >= targetStep) ??
+    Math.ceil(targetStep / 100000) * 100000;
+  const niceMax = Math.ceil(maxTotal / step) * step;
+  const tickValues = [];
+  for (let value = 0; value <= niceMax; value += step) {
+    tickValues.push(value);
+  }
+  return { niceMax, tickValues };
+}
+
+/**
+ * Pure SVG path-data builder for a rectangle with rounded TOP corners and
+ * square bottom corners — the error segment's shape (see `renderRecordsChart`
+ * below): SVG's `rect` `rx` attribute rounds all four corners uniformly, with
+ * no per-corner control, so the error segment (which must stay square where
+ * it meets the saved segment, or the baseline, below it) is drawn as a path
+ * instead. `radius` is clamped to both the segment's height and half its
+ * width so a very short or very narrow segment never renders a
+ * self-intersecting curve. Extracted as a pure function of numbers so it's
+ * unit-testable without a DOM/SVG environment — see test/public/app.test.ts.
+ */
+function buildTopRoundedRectPath(x, y, width, height, radius) {
+  const r = Math.max(0, Math.min(radius, height, width / 2));
+  if (r === 0) {
+    return `M${x},${y + height} L${x},${y} L${x + width},${y} L${x + width},${y + height} Z`;
+  }
+  return (
+    `M${x},${y + height} L${x},${y + r} Q${x},${y} ${x + r},${y} ` +
+    `L${x + width - r},${y} Q${x + width},${y} ${x + width},${y + r} ` +
+    `L${x + width},${y + height} Z`
+  );
+}
+
+const CHART_PLOT_HEIGHT = 200;
+const CHART_MARGIN = { top: 16, right: 16, bottom: 32, left: 44 };
+const CHART_BAND_WIDTH = 56;
+const CHART_BAR_MAX_THICKNESS = 24;
+const CHART_SEGMENT_GAP = 2;
+const CHART_BAR_CORNER_RADIUS = 4;
+
+/**
+ * Builds the always-present 2-series legend (Saved/Error) via
+ * `createElement`/`textContent` — never `innerHTML` — per this codebase's
+ * XSS-avoidance convention (see `escapeHtml`'s comment above).
+ */
+function buildChartLegend() {
+  const legend = document.createElement("div");
+  legend.className = "chart-legend";
+
+  for (const [className, label] of [
+    ["chart-legend-swatch-saved", "Saved"],
+    ["chart-legend-swatch-error", "Error"],
+  ]) {
+    const item = document.createElement("span");
+    item.className = "chart-legend-item";
+    const swatch = document.createElement("span");
+    swatch.className = `chart-legend-swatch ${className}`;
+    const text = document.createElement("span");
+    text.textContent = label;
+    item.append(swatch, text);
+    legend.appendChild(item);
+  }
+
+  return legend;
+}
+
+function showChartTooltip(event, text) {
+  const tooltip = document.getElementById("records-chart-tooltip");
+  const container = document.getElementById("records-chart");
+  if (tooltip === null || container === null) return;
+  tooltip.textContent = text;
+  tooltip.hidden = false;
+  const containerRect = container.getBoundingClientRect();
+  const targetRect = event.currentTarget.getBoundingClientRect();
+  tooltip.style.left = `${targetRect.left + targetRect.width / 2 - containerRect.left}px`;
+  tooltip.style.top = `${targetRect.top - containerRect.top}px`;
+}
+
+function hideChartTooltip() {
+  const tooltip = document.getElementById("records-chart-tooltip");
+  if (tooltip === null) return;
+  tooltip.hidden = true;
+}
+
+/**
+ * Builds the y-axis gridlines + tick labels — mirrors `buildChartLegend`'s
+ * extraction pattern above: a mechanical, repetitive DOM-building loop pulled
+ * out of `renderRecordsChart`. Returns a `DocumentFragment` with each tick's
+ * line and label appended in the same order the inline loop used to, so
+ * `svg.appendChild(...)`ing the result reproduces the exact prior DOM
+ * structure.
+ */
+function buildChartGridlines(svgNs, tickValues, { baselineY, scaleY, marginLeft, plotWidth, colorGridline, colorBaseline }) {
+  const fragment = document.createDocumentFragment();
+  for (const tick of tickValues) {
+    const y = baselineY - scaleY(tick);
+
+    const line = document.createElementNS(svgNs, "line");
+    line.setAttribute("x1", String(marginLeft));
+    line.setAttribute("x2", String(marginLeft + plotWidth));
+    line.setAttribute("y1", String(y));
+    line.setAttribute("y2", String(y));
+    line.setAttribute("class", "chart-gridline");
+    line.setAttribute("stroke", tick === 0 ? colorBaseline : colorGridline);
+    fragment.appendChild(line);
+
+    const tickLabel = document.createElementNS(svgNs, "text");
+    tickLabel.setAttribute("x", String(marginLeft - 8));
+    tickLabel.setAttribute("y", String(y));
+    tickLabel.setAttribute("class", "chart-axis-label chart-axis-label-y");
+    tickLabel.textContent = String(tick);
+    fragment.appendChild(tickLabel);
+  }
+  return fragment;
+}
+
+/**
+ * Builds one period's bar group (saved rect + error path + hit-target rect +
+ * hover/focus tooltip listeners) plus its x-axis label — the per-entry unit
+ * `renderRecordsChart`'s data loop repeats once per period. Mirrors
+ * `buildChartGridlines` above: returns a `DocumentFragment` with the group
+ * then the label appended in the same order the inline loop used to, so
+ * `svg.appendChild(...)`ing the result reproduces the exact prior DOM
+ * structure.
+ */
+function buildChartBarGroup(svgNs, entry, index, { scaleY, baselineY, colorSaved, colorError, granularity }) {
+  const bandX = CHART_MARGIN.left + index * CHART_BAND_WIDTH;
+  const barWidth = Math.min(CHART_BAR_MAX_THICKNESS, CHART_BAND_WIDTH - 16);
+  const barX = bandX + (CHART_BAND_WIDTH - barWidth) / 2;
+  const savedHeight = scaleY(entry.saved);
+  const errorHeight = scaleY(entry.error);
+  const hasGap = savedHeight > 0 && errorHeight > 0;
+
+  const group = document.createElementNS(svgNs, "g");
+  group.setAttribute("tabindex", "0");
+  group.setAttribute("class", "chart-bar-group");
+  group.setAttribute("role", "group");
+  const periodLabel = formatChartPeriodLabel(entry.period, granularity);
+  group.setAttribute("aria-label", `${periodLabel}: ${entry.saved} saved, ${entry.error} error`);
+
+  if (savedHeight > 0) {
+    const insetTop = hasGap ? CHART_SEGMENT_GAP / 2 : 0;
+    const savedRect = document.createElementNS(svgNs, "rect");
+    savedRect.setAttribute("x", String(barX));
+    savedRect.setAttribute("y", String(baselineY - savedHeight + insetTop));
+    savedRect.setAttribute("width", String(barWidth));
+    savedRect.setAttribute("height", String(Math.max(savedHeight - insetTop, 0)));
+    savedRect.setAttribute("fill", colorSaved);
+    group.appendChild(savedRect);
+  }
+
+  if (errorHeight > 0) {
+    const insetBottom = hasGap ? CHART_SEGMENT_GAP / 2 : 0;
+    const errorTop = baselineY - savedHeight - errorHeight;
+    const errorRectHeight = Math.max(errorHeight - insetBottom, 0);
+    const errorPath = document.createElementNS(svgNs, "path");
+    errorPath.setAttribute(
+      "d",
+      buildTopRoundedRectPath(barX, errorTop, barWidth, errorRectHeight, CHART_BAR_CORNER_RADIUS),
+    );
+    errorPath.setAttribute("fill", colorError);
+    group.appendChild(errorPath);
+  }
+
+  // Invisible full-band hit target: one tooltip per period, covering both
+  // stacked segments together, per this codebase's accessibility bar.
+  const hitTarget = document.createElementNS(svgNs, "rect");
+  hitTarget.setAttribute("x", String(bandX));
+  hitTarget.setAttribute("y", String(CHART_MARGIN.top));
+  hitTarget.setAttribute("width", String(CHART_BAND_WIDTH));
+  hitTarget.setAttribute("height", String(CHART_PLOT_HEIGHT));
+  hitTarget.setAttribute("class", "chart-hit-target");
+  group.appendChild(hitTarget);
+
+  const tooltipText = `${periodLabel} — Saved: ${entry.saved}, Error: ${entry.error}`;
+  group.addEventListener("pointerenter", (event) => showChartTooltip(event, tooltipText));
+  group.addEventListener("pointerleave", hideChartTooltip);
+  group.addEventListener("focus", (event) => showChartTooltip(event, tooltipText));
+  group.addEventListener("blur", hideChartTooltip);
+
+  const xLabel = document.createElementNS(svgNs, "text");
+  xLabel.setAttribute("x", String(bandX + CHART_BAND_WIDTH / 2));
+  xLabel.setAttribute("y", String(baselineY + 20));
+  xLabel.setAttribute("class", "chart-axis-label chart-axis-label-x");
+  xLabel.textContent = periodLabel;
+
+  const fragment = document.createDocumentFragment();
+  fragment.append(group, xLabel);
+  return fragment;
+}
+
+/**
+ * Renders the stacked-bar SVG into `#records-chart` — built entirely with
+ * `document.createElementNS`, never an HTML/SVG string, per this codebase's
+ * XSS-avoidance convention (see `escapeHtml`'s comment above): even though
+ * `period`/counts are currently server-controlled-safe, dynamically-inserted
+ * text is always treated the same way here. Colors are read from the
+ * `--chart-*` CSS custom properties via `getComputedStyle` rather than
+ * hardcoded, so the chart repaints correctly across the light/dark theme
+ * toggle without any JS changes.
+ */
+function renderRecordsChart(data, granularity) {
+  const container = document.getElementById("records-chart");
+  container.innerHTML = "";
+  container.appendChild(buildChartLegend());
+
+  if (data.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "No data for this range yet.";
+    container.appendChild(empty);
+    return;
+  }
+
+  const { niceMax, tickValues } = computeChartScale(data);
+  const plotWidth = data.length * CHART_BAND_WIDTH;
+  const width = plotWidth + CHART_MARGIN.left + CHART_MARGIN.right;
+  const height = CHART_PLOT_HEIGHT + CHART_MARGIN.top + CHART_MARGIN.bottom;
+  const baselineY = CHART_MARGIN.top + CHART_PLOT_HEIGHT;
+  const scaleY = (value) => (niceMax === 0 ? 0 : (value / niceMax) * CHART_PLOT_HEIGHT);
+
+  const svgNs = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(svgNs, "svg");
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Saved versus error records per period");
+  svg.classList.add("records-chart-svg");
+
+  const computed = getComputedStyle(document.documentElement);
+  const colorSaved = computed.getPropertyValue("--chart-saved").trim();
+  const colorError = computed.getPropertyValue("--chart-error").trim();
+  const colorGridline = computed.getPropertyValue("--chart-gridline").trim();
+  const colorBaseline = computed.getPropertyValue("--chart-baseline").trim();
+
+  svg.appendChild(
+    buildChartGridlines(svgNs, tickValues, {
+      baselineY,
+      scaleY,
+      marginLeft: CHART_MARGIN.left,
+      plotWidth,
+      colorGridline,
+      colorBaseline,
+    }),
+  );
+
+  data.forEach((entry, index) => {
+    svg.appendChild(
+      buildChartBarGroup(svgNs, entry, index, { scaleY, baselineY, colorSaved, colorError, granularity }),
+    );
+  });
+
+  container.appendChild(svg);
+
+  const tooltip = document.createElement("div");
+  tooltip.id = "records-chart-tooltip";
+  tooltip.className = "chart-tooltip";
+  tooltip.hidden = true;
+  container.appendChild(tooltip);
+}
+
+/**
+ * Populates the "Show as table" fallback (`#records-chart-table`) from the
+ * exact same data used to render the SVG — the required non-chart
+ * accessibility/screen-reader path. Built via `createElement`/`textContent`,
+ * never `innerHTML`, per this codebase's XSS-avoidance convention.
+ */
+function renderRecordsChartTable(data) {
+  const tbody = document.querySelector("#records-chart-table tbody");
+  tbody.innerHTML = "";
+  for (const entry of data) {
+    const row = document.createElement("tr");
+    const periodCell = document.createElement("td");
+    periodCell.textContent = entry.period;
+    const savedCell = document.createElement("td");
+    savedCell.textContent = String(entry.saved);
+    const errorCell = document.createElement("td");
+    errorCell.textContent = String(entry.error);
+    row.append(periodCell, savedCell, errorCell);
+    tbody.appendChild(row);
+  }
+}
+
+async function loadRecordsChart() {
+  const errorEl = document.getElementById("records-chart-error");
+  hideError(errorEl);
+  try {
+    const { ok, body } = await adminFetchJson(
+      `/admin/api/analytics/daily?granularity=${chartGranularity}`,
+    );
+    if (!ok) {
+      showError(errorEl, "Failed to load the saved/error chart.");
+      return;
+    }
+    renderRecordsChart(body.data, chartGranularity);
+    renderRecordsChartTable(body.data);
+  } catch (error) {
+    if (error.message !== "unauthenticated") {
+      console.error(error);
+      showError(errorEl, "Could not reach the server.");
+    }
+  }
+}
+
+function setChartGranularity(granularity) {
+  chartGranularity = granularity;
+  document.getElementById("chart-granularity-day").setAttribute("aria-pressed", String(granularity === "day"));
+  document.getElementById("chart-granularity-week").setAttribute("aria-pressed", String(granularity === "week"));
+  loadRecordsChart();
 }
 
 // ---------------------------------------------------------------------------
@@ -904,7 +1339,6 @@ async function bulkRetryErrors() {
     resultEl.textContent = formatBulkRetrySummary(body.data);
     errorsOffset = 0;
     await loadErrors();
-    await loadAnalytics(document.getElementById("analytics-day-filter").value);
   } catch (error) {
     if (error.message !== "unauthenticated") {
       console.error(error);
@@ -950,6 +1384,17 @@ function initErrorsPage() {
   });
   document.getElementById("bulk-retry-button").addEventListener("click", () => bulkRetryErrors());
 
+  loadErrors();
+}
+
+/**
+ * The Error Analytics section used to live on the Errors page; it now has
+ * its own page (`analytics.html`) — see `initErrorsPage` above, which no
+ * longer wires or loads it. `loadAnalytics`/`renderAnalyticsTable`/
+ * `formatAnalyticsPercentage` are unchanged, just re-wired to this
+ * dedicated init function.
+ */
+function initAnalyticsPage() {
   const dayFilterInput = document.getElementById("analytics-day-filter");
   dayFilterInput.value = getTodayUtcDateString();
   dayFilterInput.addEventListener("change", (event) => {
@@ -960,7 +1405,6 @@ function initErrorsPage() {
     loadAnalytics(day);
   });
 
-  loadErrors();
   loadAnalytics(dayFilterInput.value);
 }
 
@@ -1016,12 +1460,15 @@ function initCatalogPage() {
 // ---------------------------------------------------------------------------
 
 function init() {
+  initTheme();
   wireLogout();
+  markActiveNavLink();
   const page = document.body.dataset.page;
   if (page === "dashboard") initDashboardPage();
   else if (page === "mappings") initMappingsPage();
   else if (page === "errors") initErrorsPage();
   else if (page === "catalog") initCatalogPage();
+  else if (page === "analytics") initAnalyticsPage();
 }
 
 // Guarded on `typeof document !== "undefined"` so this file can also be
@@ -1060,6 +1507,15 @@ if (typeof module !== "undefined") {
     formatTimestamp,
     formatAnalyticsPercentage,
     getTodayUtcDateString,
+    formatChartPeriodLabel,
+    computeChartScale,
+    buildTopRoundedRectPath,
+    // `getStoredTheme`/`applyTheme` touch only `window.localStorage`/
+    // `window.matchMedia`/`document.documentElement`/`document.getElementById`
+    // — never a full DOM tree — so, like `adminFetch` below, they're testable
+    // under plain Node with a minimal mock instead of a jsdom dependency.
+    getStoredTheme,
+    applyTheme,
     // `adminFetch` touches only `fetch`/`window.location`, never `document`,
     // so it's testable here without a DOM/jsdom dependency (see
     // test/public/app.test.ts) — used specifically to prove that a 403

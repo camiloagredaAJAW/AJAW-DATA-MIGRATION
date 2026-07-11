@@ -1,6 +1,14 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <script>
+    (function () {
+      var stored = localStorage.getItem("theme");
+      var theme = stored === "dark" || stored === "light" ? stored
+        : (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      document.documentElement.dataset.theme = theme;
+    })();
+  </script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Source Catalog — Ajaw Data Migration Admin</title>
@@ -13,8 +21,12 @@
       <a href="/admin/mappings.html">Field Mappings</a>
       <a href="/admin/catalog.html">Source Catalog</a>
       <a href="/admin/errors.html">Errors</a>
+      <a href="/admin/analytics.html">Analytics</a>
     </nav>
-    <button id="logout-button">Log out</button>
+    <div class="header-actions">
+      <button id="theme-toggle-button" type="button">Dark mode</button>
+      <button id="logout-button">Log out</button>
+    </div>
   </header>
 
   <main>

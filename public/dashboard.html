@@ -1,6 +1,14 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <script>
+    (function () {
+      var stored = localStorage.getItem("theme");
+      var theme = stored === "dark" || stored === "light" ? stored
+        : (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      document.documentElement.dataset.theme = theme;
+    })();
+  </script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Dashboard — Ajaw Data Migration Admin</title>
@@ -13,8 +21,12 @@
       <a href="/admin/mappings.html">Field Mappings</a>
       <a href="/admin/catalog.html">Source Catalog</a>
       <a href="/admin/errors.html">Errors</a>
+      <a href="/admin/analytics.html">Analytics</a>
     </nav>
-    <button id="logout-button">Log out</button>
+    <div class="header-actions">
+      <button id="theme-toggle-button" type="button">Dark mode</button>
+      <button id="logout-button">Log out</button>
+    </div>
   </header>
 
   <main>
@@ -32,6 +44,23 @@
       <button id="resume-button" disabled>Resume</button>
       <button id="stop-button" class="danger" disabled>Stop</button>
     </div>
+
+    <h2>Saved vs Error Records</h2>
+    <div class="chart-toolbar">
+      <div class="chart-range-toggle" role="group" aria-label="Chart granularity">
+        <button type="button" id="chart-granularity-day" class="chart-range-button" aria-pressed="true">Day</button>
+        <button type="button" id="chart-granularity-week" class="chart-range-button" aria-pressed="false">Week</button>
+      </div>
+    </div>
+    <div id="records-chart" class="chart-card"></div>
+    <p id="records-chart-error" class="error-banner" hidden></p>
+    <details class="chart-table-details">
+      <summary>Show as table</summary>
+      <table id="records-chart-table">
+        <thead><tr><th>Period</th><th>Saved</th><th>Error</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </details>
 
     <h2>Source Catalog</h2>
     <p class="muted">

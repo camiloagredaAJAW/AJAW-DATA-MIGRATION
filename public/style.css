@@ -2,10 +2,49 @@
   color-scheme: light;
   --border: #d0d7de;
   --bg-muted: #f6f8fa;
-  --text-muted: #57606a;
+  --text-muted: #898781;
   --danger: #cf222e;
   --danger-bg: #fff1f0;
   --ok: #1a7f37;
+
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --bg-page: #f9f9f7;
+  --surface: #fcfcfb;
+  --focus-ring: #2f81f7;
+  --radius: 6px;
+  --radius-sm: 4px;
+
+  /* Chart-only tokens — deliberately separate from --ok/--danger (those are
+     already used for status pills/buttons with different semantics); keeping
+     the chart's saved/error colors on their own dedicated custom properties
+     means changing one status color never accidentally repaints the chart. */
+  --chart-saved: #0ca30c;
+  --chart-error: #d03b3b;
+  --chart-surface: #fcfcfb;
+  --chart-gridline: #e1e0d9;
+  --chart-baseline: #c3c2b7;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --border: #2c2c2a;
+  --bg-muted: #1a1a19;
+  --text-muted: #898781;
+  --danger: #f85149;
+  --danger-bg: #3d1418;
+  --ok: #2ea043;
+
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --bg-page: #0d0d0d;
+  --surface: #1a1a19;
+
+  --chart-saved: #0ca30c;
+  --chart-error: #d03b3b;
+  --chart-surface: #1a1a19;
+  --chart-gridline: #2c2c2a;
+  --chart-baseline: #383835;
 }
 
 * {
@@ -15,27 +54,54 @@
 body {
   margin: 0;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  color: #1f2328;
-  background: #fff;
+  color: var(--text-primary);
+  background: var(--bg-page);
+}
+
+h1 {
+  font-size: 24px;
+  margin: 0 0 8px;
+}
+
+h2 {
+  font-size: 18px;
+  margin: 32px 0 8px;
 }
 
 header.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 12px 24px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-muted);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
 header.app-header nav a {
   margin-right: 16px;
-  color: #1f2328;
+  padding-bottom: 2px;
+  color: var(--text-primary);
   text-decoration: none;
+  border-bottom: 2px solid transparent;
 }
 
 header.app-header nav a:hover {
   text-decoration: underline;
+}
+
+header.app-header nav a.active {
+  font-weight: 600;
+  border-bottom-color: var(--ok);
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 main {
@@ -49,7 +115,8 @@ main {
   margin: 80px auto;
   padding: 24px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
+  background: var(--surface);
 }
 
 form.stack label {
@@ -65,21 +132,24 @@ form.stack select {
   margin-top: 4px;
   padding: 6px 8px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-size: 14px;
+  background: var(--surface);
+  color: var(--text-primary);
 }
 
 button {
   cursor: pointer;
   padding: 6px 14px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-muted);
+  color: var(--text-primary);
   font-size: 14px;
 }
 
 button:hover:not(:disabled) {
-  background: #eaeef2;
+  background: var(--border);
 }
 
 button:disabled {
@@ -103,10 +173,23 @@ button.danger {
   color: #fff;
 }
 
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
   margin-top: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface);
 }
 
 th,
@@ -123,6 +206,7 @@ th {
 
 .controls-row {
   display: flex;
+  align-items: center;
   gap: 8px;
   margin: 16px 0;
 }
@@ -138,13 +222,15 @@ th {
 .filters-row select {
   padding: 6px 8px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-size: 14px;
+  background: var(--surface);
+  color: var(--text-primary);
 }
 
 .error-banner {
   padding: 8px 12px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--danger-bg);
   color: var(--danger);
   border: 1px solid var(--danger);
@@ -191,11 +277,18 @@ th {
   font-weight: 600;
 }
 
+#run-summary {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 16px;
+}
+
 .danger-zone {
   margin: 24px 0;
   padding: 16px;
   border: 1px solid var(--danger);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--danger-bg);
 }
 
@@ -208,14 +301,155 @@ th {
   flex: 1;
   padding: 6px 8px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-size: 14px;
+  background: var(--surface);
+  color: var(--text-primary);
 }
 
 .cell-input {
   width: 100%;
   padding: 4px 6px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  background: var(--surface);
+  color: var(--text-primary);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Saved vs Error Records chart                                            */
+/* ---------------------------------------------------------------------- */
+
+.chart-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.chart-range-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.chart-range-button {
+  border: none;
+  border-radius: 0;
+  background: var(--surface);
+}
+
+.chart-range-button + .chart-range-button {
+  border-left: 1px solid var(--border);
+}
+
+.chart-range-button[aria-pressed="true"] {
+  background: var(--ok);
+  color: #fff;
+}
+
+.chart-card {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--chart-surface);
+  padding: 16px;
+  min-height: 120px;
+}
+
+.chart-legend {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chart-legend-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.chart-legend-swatch-saved {
+  background: var(--chart-saved);
+}
+
+.chart-legend-swatch-error {
+  background: var(--chart-error);
+}
+
+.records-chart-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.chart-axis-label {
+  fill: var(--text-muted);
+  font-size: 11px;
+}
+
+.chart-axis-label-y {
+  text-anchor: end;
+  dominant-baseline: middle;
+}
+
+.chart-axis-label-x {
+  text-anchor: middle;
+}
+
+.chart-bar-group {
+  cursor: pointer;
+}
+
+.chart-bar-group:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.chart-hit-target {
+  fill: transparent;
+}
+
+.chart-bar-group:hover .chart-hit-target,
+.chart-bar-group:focus .chart-hit-target {
+  fill: var(--border);
+  opacity: 0.25;
+}
+
+.chart-tooltip {
+  position: absolute;
+  transform: translate(-50%, -100%) translateY(-8px);
+  background: var(--text-primary);
+  color: var(--bg-page);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.chart-tooltip[hidden] {
+  display: none;
+}
+
+.chart-table-details {
+  margin-top: 8px;
+}
+
+.chart-table-details summary {
+  cursor: pointer;
+  color: var(--text-secondary);
   font-size: 13px;
 }

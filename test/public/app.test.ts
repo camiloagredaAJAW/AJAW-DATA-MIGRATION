@@ -28,6 +28,11 @@ const {
   formatAnalyticsPercentage,
   getTodayUtcDateString,
   adminFetch,
+  getStoredTheme,
+  applyTheme,
+  formatChartPeriodLabel,
+  computeChartScale,
+  buildTopRoundedRectPath,
 } = require(appJsPath) as {
   escapeHtml: (value: unknown) => string;
   describeRetryOutcome: (status: number, body: unknown) => string;
@@ -70,6 +75,13 @@ const {
   formatAnalyticsPercentage: (percentage: number) => string;
   getTodayUtcDateString: () => string;
   adminFetch: (path: string, options?: Record<string, unknown>) => Promise<Response>;
+  getStoredTheme: () => "light" | "dark";
+  applyTheme: (theme: "light" | "dark") => void;
+  formatChartPeriodLabel: (period: string, granularity: "day" | "week") => string;
+  computeChartScale: (
+    data: { period: string; saved: number; error: number }[],
+  ) => { niceMax: number; tickValues: number[] };
+  buildTopRoundedRectPath: (x: number, y: number, width: number, height: number, radius: number) => string;
 };
 
 describe("escapeHtml", () => {
@@ -512,5 +524,178 @@ describe("getTodayUtcDateString", () => {
     vi.setSystemTime(new Date("2026-03-05T12:00:00.000Z"));
 
     expect(getTodayUtcDateString()).toBe("2026-03-05");
+  });
+});
+
+describe("getStoredTheme", () => {
+  const originalWindow = (globalThis as { window?: unknown }).window;
+
+  afterEach(() => {
+    (globalThis as { window?: unknown }).window = originalWindow;
+  });
+
+  it("returns the stored theme when localStorage has a valid value", () => {
+    (globalThis as { window?: unknown }).window = {
+      localStorage: { getItem: vi.fn().mockReturnValue("dark") },
+      matchMedia: vi.fn().mockReturnValue({ matches: false }),
+    };
+    expect(getStoredTheme()).toBe("dark");
+  });
+
+  it("ignores an invalid stored value and falls back to the system preference", () => {
+    (globalThis as { window?: unknown }).window = {
+      localStorage: { getItem: vi.fn().mockReturnValue("neon") },
+      matchMedia: vi.fn().mockReturnValue({ matches: true }),
+    };
+    expect(getStoredTheme()).toBe("dark");
+  });
+
+  it("falls back to light when there is no stored value and the system prefers light", () => {
+    (globalThis as { window?: unknown }).window = {
+      localStorage: { getItem: vi.fn().mockReturnValue(null) },
+      matchMedia: vi.fn().mockReturnValue({ matches: false }),
+    };
+    expect(getStoredTheme()).toBe("light");
+  });
+
+  it("falls back to dark when there is no stored value and the system prefers dark", () => {
+    (globalThis as { window?: unknown }).window = {
+      localStorage: { getItem: vi.fn().mockReturnValue(null) },
+      matchMedia: vi.fn().mockReturnValue({ matches: true }),
+    };
+    expect(getStoredTheme()).toBe("dark");
+  });
+});
+
+/**
+ * `applyTheme` touches only `document.documentElement`/`document.getElementById`
+ * and `window.localStorage` — never a full DOM tree — so, like `adminFetch`
+ * (see its export comment above), it's testable under plain Node with a
+ * minimal mock instead of a jsdom dependency.
+ */
+describe("applyTheme", () => {
+  const originalWindow = (globalThis as { window?: unknown }).window;
+  const originalDocument = (globalThis as { document?: unknown }).document;
+
+  afterEach(() => {
+    (globalThis as { window?: unknown }).window = originalWindow;
+    (globalThis as { document?: unknown }).document = originalDocument;
+  });
+
+  it("sets the html dataset theme and persists it to localStorage", () => {
+    const setItem = vi.fn();
+    const documentElement: { dataset: Record<string, string> } = { dataset: {} };
+    (globalThis as { window?: unknown }).window = { localStorage: { setItem } };
+    (globalThis as { document?: unknown }).document = {
+      documentElement,
+      getElementById: vi.fn().mockReturnValue(null),
+    };
+
+    applyTheme("dark");
+
+    expect(documentElement.dataset.theme).toBe("dark");
+    expect(setItem).toHaveBeenCalledWith("theme", "dark");
+  });
+
+  it("updates the toggle button's label to name the theme a click will switch TO", () => {
+    const setItem = vi.fn();
+    const button = { textContent: "" };
+    (globalThis as { window?: unknown }).window = { localStorage: { setItem } };
+    (globalThis as { document?: unknown }).document = {
+      documentElement: { dataset: {} },
+      getElementById: vi.fn().mockReturnValue(button),
+    };
+
+    applyTheme("light");
+    expect(button.textContent).toBe("Dark mode");
+
+    applyTheme("dark");
+    expect(button.textContent).toBe("Light mode");
+  });
+
+  it("does nothing to a button when none is present on the page", () => {
+    const setItem = vi.fn();
+    (globalThis as { window?: unknown }).window = { localStorage: { setItem } };
+    (globalThis as { document?: unknown }).document = {
+      documentElement: { dataset: {} },
+      getElementById: vi.fn().mockReturnValue(null),
+    };
+
+    expect(() => applyTheme("light")).not.toThrow();
+  });
+});
+
+describe("formatChartPeriodLabel", () => {
+  it("formats a day-granularity period as 'Mon DD'", () => {
+    expect(formatChartPeriodLabel("2026-07-08", "day")).toBe("Jul 08");
+  });
+
+  it("formats a week-granularity period as 'Wk of Mon DD'", () => {
+    expect(formatChartPeriodLabel("2026-07-06", "week")).toBe("Wk of Jul 06");
+  });
+
+  it("formats January and December correctly", () => {
+    expect(formatChartPeriodLabel("2026-01-05", "day")).toBe("Jan 05");
+    expect(formatChartPeriodLabel("2026-12-31", "week")).toBe("Wk of Dec 31");
+  });
+});
+
+describe("computeChartScale", () => {
+  it("returns a zero scale for an empty dataset", () => {
+    expect(computeChartScale([])).toEqual({ niceMax: 0, tickValues: [0] });
+  });
+
+  it("returns a zero scale when every period has zero saved and zero error", () => {
+    expect(computeChartScale([{ period: "2026-07-08", saved: 0, error: 0 }])).toEqual({
+      niceMax: 0,
+      tickValues: [0],
+    });
+  });
+
+  it("rounds up to a nice step for a small stacked max", () => {
+    expect(
+      computeChartScale([
+        { period: "2026-07-08", saved: 5, error: 2 },
+        { period: "2026-07-09", saved: 1, error: 0 },
+      ]),
+    ).toEqual({ niceMax: 8, tickValues: [0, 2, 4, 6, 8] });
+  });
+
+  it("rounds up to a nice step for a larger stacked max", () => {
+    expect(computeChartScale([{ period: "2026-07-08", saved: 200, error: 34 }])).toEqual({
+      niceMax: 300,
+      tickValues: [0, 100, 200, 300],
+    });
+  });
+
+  it("uses the exact value as the step when it already lands on a nice number", () => {
+    expect(computeChartScale([{ period: "2026-07-08", saved: 60, error: 40 }])).toEqual({
+      niceMax: 100,
+      tickValues: [0, 25, 50, 75, 100],
+    });
+  });
+});
+
+describe("buildTopRoundedRectPath", () => {
+  it("builds a path with rounded top corners and square bottom corners", () => {
+    expect(buildTopRoundedRectPath(10, 20, 24, 40, 4)).toBe(
+      "M10,60 L10,24 Q10,20 14,20 L30,20 Q34,20 34,24 L34,60 Z",
+    );
+  });
+
+  it("clamps the radius to the segment height for a very short segment", () => {
+    expect(buildTopRoundedRectPath(0, 0, 20, 2, 4)).toBe(
+      "M0,2 L0,2 Q0,0 2,0 L18,0 Q20,0 20,2 L20,2 Z",
+    );
+  });
+
+  it("clamps the radius to half the width for a very narrow segment", () => {
+    expect(buildTopRoundedRectPath(0, 0, 6, 10, 4)).toBe(
+      "M0,10 L0,3 Q0,0 3,0 L3,0 Q6,0 6,3 L6,10 Z",
+    );
+  });
+
+  it("falls back to a square rectangle when the effective radius is zero", () => {
+    expect(buildTopRoundedRectPath(0, 0, 10, 0, 4)).toBe("M0,0 L0,0 L10,0 L10,0 Z");
   });
 });
