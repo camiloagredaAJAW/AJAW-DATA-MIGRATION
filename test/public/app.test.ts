@@ -597,9 +597,14 @@ describe("applyTheme", () => {
     expect(setItem).toHaveBeenCalledWith("theme", "dark");
   });
 
-  it("updates the toggle button's label to name the theme a click will switch TO", () => {
+  it("updates the toggle button's icon/label to name the theme a click will switch TO", () => {
     const setItem = vi.fn();
-    const button = { textContent: "" };
+    const setAttribute = vi.fn();
+    const button: { dataset: Record<string, string>; title: string; setAttribute: typeof setAttribute } = {
+      dataset: {},
+      title: "",
+      setAttribute,
+    };
     (globalThis as { window?: unknown }).window = { localStorage: { setItem } };
     (globalThis as { document?: unknown }).document = {
       documentElement: { dataset: {} },
@@ -607,10 +612,14 @@ describe("applyTheme", () => {
     };
 
     applyTheme("light");
-    expect(button.textContent).toBe("Dark mode");
+    expect(button.dataset.icon).toBe("moon");
+    expect(button.title).toBe("Switch to dark mode");
+    expect(setAttribute).toHaveBeenCalledWith("aria-label", "Switch to dark mode");
 
     applyTheme("dark");
-    expect(button.textContent).toBe("Light mode");
+    expect(button.dataset.icon).toBe("sun");
+    expect(button.title).toBe("Switch to light mode");
+    expect(setAttribute).toHaveBeenCalledWith("aria-label", "Switch to light mode");
   });
 
   it("does nothing to a button when none is present on the page", () => {

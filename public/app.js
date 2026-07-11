@@ -120,19 +120,25 @@ function getStoredTheme() {
 /**
  * Applies a theme: sets `<html data-theme="...">` (the hook `style.css` keys
  * `:root[data-theme="dark"]` off of), persists it to `localStorage`, and —
- * when a theme-toggle button exists on the current page — updates its label
- * to name the theme a click will switch TO (e.g. "Dark mode" while
- * currently light). Touches only `document.documentElement`/
- * `document.getElementById` and `window.localStorage`, so like `adminFetch`
- * it's testable with a minimal mock rather than a full jsdom tree (see
- * test/public/app.test.ts).
+ * when a theme-toggle button exists on the current page — sets its
+ * `data-icon` to the sun/moon icon for the theme a click will switch TO
+ * (e.g. the moon icon while currently light), plus a matching
+ * `aria-label`/`title` so the icon-only button still names itself for
+ * assistive tech. The icon itself is drawn in CSS via `mask-image` keyed off
+ * `data-icon` (see style.css) rather than built here as SVG DOM, specifically
+ * so this function keeps touching only `document.documentElement`/
+ * `document.getElementById` and `window.localStorage` — testable with a
+ * minimal mock rather than a full jsdom tree (see test/public/app.test.ts).
  */
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   window.localStorage.setItem("theme", theme);
   const button = document.getElementById("theme-toggle-button");
   if (button !== null) {
-    button.textContent = theme === "dark" ? "Light mode" : "Dark mode";
+    const nextTheme = theme === "dark" ? "light" : "dark";
+    button.dataset.icon = theme === "dark" ? "sun" : "moon";
+    button.title = `Switch to ${nextTheme} mode`;
+    button.setAttribute("aria-label", `Switch to ${nextTheme} mode`);
   }
 }
 
@@ -610,7 +616,7 @@ function buildTopRoundedRectPath(x, y, width, height, radius) {
   );
 }
 
-const CHART_PLOT_HEIGHT = 200;
+const CHART_PLOT_HEIGHT = 110;
 const CHART_MARGIN = { top: 16, right: 16, bottom: 32, left: 44 };
 const CHART_BAND_WIDTH = 56;
 const CHART_BAR_MAX_THICKNESS = 24;
