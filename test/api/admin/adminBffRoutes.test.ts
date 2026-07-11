@@ -17,6 +17,7 @@ import { createMigrationController } from "../../../src/migration/controller.js"
 import { createRun, updateRunStatus } from "../../../src/db/runsRepo.js";
 import { advanceOffset, setAiSearchId, upsertCheckpoint } from "../../../src/db/checkpointRepo.js";
 import { markResolved, recordError } from "../../../src/db/importErrorRepo.js";
+import { incrementSavedCount } from "../../../src/db/dailySaveStatsRepo.js";
 
 const migrationsDir = path.join(process.cwd(), "src", "migrations");
 
@@ -643,6 +644,120 @@ describe("GET /admin/api/errors/analytics", () => {
     expect(response.json()).toEqual({
       data: [{ day: "2026-07-08", hour: "09", count: 1, percentage: 100 }],
     });
+  });
+});
+
+describe("GET /admin/api/analytics/daily", () => {
+  it("returns saved-vs-error counts by day, defaulting to granularity=day and limit=14", async () => {
+    const db = freshDb();
+    const run = createRun(db);
+    incrementSavedCount(db, "2026-07-08");
+    incrementSavedCount(db, "2026-07-08");
+    const error = recordError(db, {
+      runId: run.id,
+      countryCode: "ar",
+      recordOffset: 1,
+      recordIdentifier: null,
+      errorReason: "boom",
+    });
+    db.prepare(`UPDATE import_errors SET created_at = ? WHERE id = ?`).run(
+      "2026-07-09T09:00:00.000Z",
+      error.id,
+    );
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/admin/api/analytics/daily",
+      headers: adminGetHeaders(cookie),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      data: [
+        { period: "2026-07-08", saved: 2, error: 0 },
+        { period: "2026-07-09", saved: 0, error: 1 },
+      ],
+    });
+  });
+
+  it("buckets by ISO week when granularity=week", async () => {
+    const db = freshDb();
+    // 2026-07-06 is a Monday; 2026-07-08 falls in that same ISO week.
+    incrementSavedCount(db, "2026-07-06");
+    incrementSavedCount(db, "2026-07-08");
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/admin/api/analytics/daily?granularity=week",
+      headers: adminGetHeaders(cookie),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ data: [{ period: "2026-07-06", saved: 2, error: 0 }] });
+  });
+
+  it("respects an explicit limit", async () => {
+    const db = freshDb();
+    incrementSavedCount(db, "2026-07-01");
+    incrementSavedCount(db, "2026-07-02");
+    incrementSavedCount(db, "2026-07-03");
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/admin/api/analytics/daily?limit=2",
+      headers: adminGetHeaders(cookie),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      data: [
+        { period: "2026-07-02", saved: 1, error: 0 },
+        { period: "2026-07-03", saved: 1, error: 0 },
+      ],
+    });
+  });
+
+  it("returns 400 for an invalid granularity", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/admin/api/analytics/daily?granularity=month",
+      headers: adminGetHeaders(cookie),
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("returns 400 when limit exceeds the max of 90", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+    const cookie = await adminLoginCookie(server);
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/admin/api/analytics/daily?limit=91",
+      headers: adminGetHeaders(cookie),
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("rejects requests without an authenticated session", async () => {
+    const db = freshDb();
+    const server = buildServer({ db, authConfig, migrationDeps: fakeMigrationDeps(db) });
+
+    const response = await server.inject({ method: "GET", url: "/admin/api/analytics/daily" });
+
+    expect(response.statusCode).toBe(401);
   });
 });
 

@@ -37,6 +37,11 @@ const errorAnalyticsQuerySchema = z.object({
   day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "day must be YYYY-MM-DD").optional(),
 });
 
+const dailyStatsQuerySchema = z.object({
+  granularity: z.enum(["day", "week"]).optional().default("day"),
+  limit: z.coerce.number().int().positive().max(90).optional(),
+});
+
 const errorIdParamSchema = z.object({
   id: z.coerce.number().int().positive(),
 });
@@ -181,6 +186,16 @@ export function registerAdminBffRoutes(
     }
 
     return reply.send({ data: controller.getErrorAnalytics(parsedQuery.data.day) });
+  });
+
+  fastify.get("/admin/api/analytics/daily", async (request, reply) => {
+    const parsedQuery = dailyStatsQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return reply.code(400).send(validationError(parsedQuery.error.message));
+    }
+    const { granularity, limit } = parsedQuery.data;
+    const defaultLimit = granularity === "week" ? 8 : 14;
+    return reply.send({ data: controller.getDailyRecordStats(granularity, limit ?? defaultLimit) });
   });
 
   fastify.post("/admin/api/errors/:id/retry", async (request, reply) => {

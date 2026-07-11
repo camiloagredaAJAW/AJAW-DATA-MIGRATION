@@ -270,3 +270,35 @@ export function getErrorAnalytics(db: Database.Database, day?: string): ErrorAna
     percentage: Math.round((row.count / total) * 100 * 10) / 10,
   }));
 }
+
+/**
+ * Error counts per UTC day, ascending — the "error" half of the saved-vs-
+ * error daily chart (see `dailySaveStatsRepo.ts`'s `getSavedCountsByDay` for
+ * the "saved" half, and `mergeDailyRecordCounts` for how the two are
+ * combined). Unlike `getErrorAnalytics`, this has no percentage/hour
+ * breakdown — just a flat day->count series.
+ */
+export function getErrorCountsByDay(
+  db: Database.Database,
+  sinceDay?: string,
+): { day: string; count: number }[] {
+  const sql =
+    sinceDay === undefined
+      ? `
+        SELECT strftime('%Y-%m-%d', created_at) AS day, COUNT(*) AS count
+        FROM import_errors
+        GROUP BY day
+        ORDER BY day ASC
+      `
+      : `
+        SELECT strftime('%Y-%m-%d', created_at) AS day, COUNT(*) AS count
+        FROM import_errors
+        WHERE strftime('%Y-%m-%d', created_at) >= ?
+        GROUP BY day
+        ORDER BY day ASC
+      `;
+
+  const rows = sinceDay === undefined ? db.prepare(sql).all() : db.prepare(sql).all(sinceDay);
+
+  return rows as { day: string; count: number }[];
+}

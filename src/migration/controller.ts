@@ -15,10 +15,17 @@ import {
   listImportErrors,
   countImportErrors,
   getErrorAnalytics as getErrorAnalyticsFromRepo,
+  getErrorCountsByDay,
   type ImportErrorFilter,
   type ImportErrorRow,
   type ErrorAnalyticsBucket,
 } from "../db/importErrorRepo.js";
+import { getSavedCountsByDay } from "../db/dailySaveStatsRepo.js";
+import {
+  mergeDailyRecordCounts,
+  bucketByIsoWeek,
+  type DailyRecordCount,
+} from "../analytics/dailyRecordStats.js";
 import { retrySingleRecord, type RetryOutcome } from "./retry.js";
 import { runMigration, type MigrationEngineDeps, type MigrationSummary } from "./engine.js";
 import { runFullReset, runRefreshCatalog, type FullResetResult, type RefreshCatalogResult } from "../cli/bootstrap.js";
@@ -132,6 +139,13 @@ export interface MigrationController {
    * `getErrorAnalytics` in importErrorRepo.ts.
    */
   getErrorAnalytics(day?: string): ErrorAnalyticsBucket[];
+  /**
+   * Saved-vs-error record counts bucketed by day or ISO week, most recent
+   * `limit` buckets, ascending. "Saved" only reflects successful saves recorded
+   * from `daily_save_stats` — see its migration for why there is no historical
+   * backfill before that table existed.
+   */
+  getDailyRecordStats(granularity: "day" | "week", limit: number): DailyRecordCount[];
   /**
    * Rejects with `{ outcome: "retry_in_progress" }` when a retry for the
    * same `errorId` is already in flight (see `inFlightRetries` in the
@@ -388,6 +402,19 @@ export function createMigrationController(
 
     getErrorAnalytics(day?: string): ErrorAnalyticsBucket[] {
       return getErrorAnalyticsFromRepo(db, day);
+    },
+
+    getDailyRecordStats(granularity, limit) {
+      // `[].slice(-limit)` returns the WHOLE array when `limit` is 0 (JS
+      // quirk: `slice(-0) === slice(0)`) instead of nothing — guard explicitly
+      // rather than relying on the zod schema at the HTTP boundary, since this
+      // method is part of the public `MigrationController` interface.
+      if (limit <= 0) {
+        return [];
+      }
+      const daily = mergeDailyRecordCounts(getSavedCountsByDay(db), getErrorCountsByDay(db));
+      const buckets = granularity === "week" ? bucketByIsoWeek(daily) : daily;
+      return buckets.slice(-limit);
     },
 
     async retry(errorId: number): Promise<RetryOutcome> {

@@ -22,6 +22,7 @@ import {
   type MigrationCheckpointStatus,
 } from "../db/checkpointRepo.js";
 import { recordError } from "../db/importErrorRepo.js";
+import { incrementSavedCount } from "../db/dailySaveStatsRepo.js";
 
 /**
  * Injectable interruption check, polled between records (and between pages)
@@ -357,6 +358,7 @@ async function runCountryMigration(ctx: CountryMigrationContext): Promise<Countr
         }
 
         const rawRecord = page[index]!;
+        let recordSaved = false;
         try {
           if (aiSearchId === null) {
             aiSearchId = await createAiSearchParent(
@@ -374,6 +376,7 @@ async function runCountryMigration(ctx: CountryMigrationContext): Promise<Countr
           await createAiSearchResults(session, axelorConfig, payload, fetchImpl);
           processedCount += 1;
           pagesSavedCount += 1;
+          recordSaved = true;
         } catch (error) {
           failedCount += 1;
           recordError(db, {
@@ -383,6 +386,24 @@ async function runCountryMigration(ctx: CountryMigrationContext): Promise<Countr
             recordIdentifier: deriveRecordIdentifier(rawRecord),
             errorReason: errorMessage(error),
           });
+        }
+
+        // Deliberately its own try/catch, outside the block above: the Axelor
+        // record above already saved successfully by this point, so a
+        // failure bumping this purely-additive telemetry counter (lock
+        // contention, a stale DB copy missing daily_save_stats, disk full)
+        // must never inflate failedCount or write a phantom import_errors row
+        // — retrySingleRecord has no idempotency check, so retrying that
+        // phantom error would create a duplicate AiSearchResults record for a
+        // row that already saved fine the first time.
+        if (recordSaved) {
+          try {
+            incrementSavedCount(db, new Date().toISOString().slice(0, 10));
+          } catch (error) {
+            console.error(
+              `runCountryMigration: failed to record daily_save_stats for an already-saved record (runId=${runId}, countryCode=${countryCode}): ${errorMessage(error)}`,
+            );
+          }
         }
       }
 

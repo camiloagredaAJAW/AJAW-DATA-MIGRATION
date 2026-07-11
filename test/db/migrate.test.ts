@@ -22,8 +22,9 @@ describe("migrate", () => {
 
     const result = migrate(db, migrationsDir);
 
-    expect(result.appliedVersions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(result.appliedVersions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     expect(tableNames(db)).toEqual([
+      "daily_save_stats",
       "field_mappings",
       "import_errors",
       "migration_checkpoints",
@@ -36,7 +37,7 @@ describe("migrate", () => {
     const appliedRows = db
       .prepare(`SELECT version FROM schema_migrations ORDER BY version ASC`)
       .all() as { version: number }[];
-    expect(appliedRows.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(appliedRows.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
   });
 
   it("is idempotent: rerunning migrate on an already-migrated database applies nothing new", () => {
@@ -50,7 +51,7 @@ describe("migrate", () => {
     const countRow = db
       .prepare(`SELECT COUNT(*) as count FROM schema_migrations`)
       .get() as { count: number };
-    expect(countRow.count).toBe(9);
+    expect(countRow.count).toBe(10);
   });
 
   it("enforces the unique (source_db, source_table, source_column) constraint on field_mappings", () => {
@@ -232,7 +233,7 @@ describe("migration_runs / migration_checkpoints / import_errors DDL", () => {
       const checkpointId = Number(insertResult.lastInsertRowid);
 
       const secondResult = migrate(db, migrationsDir);
-      expect(secondResult.appliedVersions).toEqual([9]);
+      expect(secondResult.appliedVersions).toEqual([9, 10]);
 
       const row = db
         .prepare(`SELECT status FROM migration_checkpoints WHERE id = ?`)

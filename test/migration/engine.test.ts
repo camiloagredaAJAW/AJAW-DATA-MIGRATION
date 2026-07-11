@@ -19,6 +19,7 @@ import type { MigrationRunStatus } from "../../src/db/runsRepo.js";
 import type { AxelorConfig } from "../../src/config/env.js";
 import type { LeadsClientConfig } from "../../src/leads/leadsClient.js";
 import type { AxelorSessionClient } from "../../src/axelor/sessionClient.js";
+import { incrementSavedCount, getSavedCountsByDay } from "../../src/db/dailySaveStatsRepo.js";
 
 // `listFieldMappings` is a hard, non-injectable import inside
 // `runCountryMigration` (not part of `MigrationEngineDeps`) — this is the
@@ -33,6 +34,19 @@ vi.mock("../../src/repos/mappingRepo.js", async (importOriginal) => {
   return {
     ...actual,
     listFieldMappings: vi.fn(actual.listFieldMappings),
+  };
+});
+
+// Same wrapping approach as `listFieldMappings` above — the only seam
+// available to make `incrementSavedCount` throw for the Fix 1 regression
+// test below (a telemetry-write failure must never be misread as a failed
+// record save). Wraps the real implementation by default so every other
+// test keeps exercising genuine DB-backed behavior.
+vi.mock("../../src/db/dailySaveStatsRepo.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/db/dailySaveStatsRepo.js")>();
+  return {
+    ...actual,
+    incrementSavedCount: vi.fn(actual.incrementSavedCount),
   };
 });
 
@@ -1092,5 +1106,77 @@ describe("runMigration", () => {
     expect(errors).toHaveLength(1);
     expect(errors[0]?.record_offset).toBeNull();
     expect(errors[0]?.error_reason).toMatch(/field_mappings lookup failed/);
+  });
+
+  it("increments daily_save_stats for the day a record is successfully saved", async () => {
+    const db = freshDb();
+    seedCatalog(db, ["AR"]);
+    seedTitleMapping(db, "AR");
+
+    const leadsFetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(textResponse(jsonLine({ legal_name: "ACME" })));
+
+    const { fetchImpl: axelorFetchImpl } = trackingAxelorFetch(900);
+
+    const deps: MigrationEngineDeps = {
+      db,
+      leadsConfig: leadsConfig(leadsFetchImpl as unknown as typeof fetch),
+      axelorConfig: axelorConfig(),
+      pageLimit: 100,
+      session: fakeSession(),
+      fetchImpl: axelorFetchImpl as unknown as typeof fetch,
+      countries: ["AR"],
+    };
+
+    const summary = await runMigration(deps);
+
+    const countrySummary = summary.countries.find((c) => c.countryCode === "AR");
+    expect(countrySummary?.processedCount).toBe(1);
+
+    const today = new Date().toISOString().slice(0, 10);
+    expect(getSavedCountsByDay(db)).toEqual([{ day: today, count: 1 }]);
+  });
+
+  it("counts a record as saved (never failed) when incrementSavedCount itself throws, and records no phantom import_errors row for it", async () => {
+    const db = freshDb();
+    seedCatalog(db, ["AR"]);
+    seedTitleMapping(db, "AR");
+
+    vi.mocked(incrementSavedCount).mockImplementationOnce(() => {
+      throw new Error("daily_save_stats table missing (stale DB copy)");
+    });
+
+    const leadsFetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(textResponse(jsonLine({ legal_name: "ACME" })));
+
+    const { fetchImpl: axelorFetchImpl } = trackingAxelorFetch(901);
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const deps: MigrationEngineDeps = {
+      db,
+      leadsConfig: leadsConfig(leadsFetchImpl as unknown as typeof fetch),
+      axelorConfig: axelorConfig(),
+      pageLimit: 100,
+      session: fakeSession(),
+      fetchImpl: axelorFetchImpl as unknown as typeof fetch,
+      countries: ["AR"],
+    };
+
+    const summary = await runMigration(deps);
+    errorSpy.mockRestore();
+
+    // The record itself saved fine — a telemetry-write failure on top of it
+    // must never be misread as a failed save.
+    const countrySummary = summary.countries.find((c) => c.countryCode === "AR");
+    expect(countrySummary?.processedCount).toBe(1);
+    expect(countrySummary?.failedCount).toBe(0);
+    expect(countrySummary?.status).toBe("completed");
+    expect(countrySummary?.halted).toBe(false);
+
+    const errors = db.prepare(`SELECT * FROM import_errors WHERE country_code = 'AR'`).all();
+    expect(errors).toHaveLength(0);
   });
 });

@@ -11,6 +11,7 @@ import {
   setAiSearchId,
 } from "../../src/db/checkpointRepo.js";
 import { recordError, markResolved } from "../../src/db/importErrorRepo.js";
+import { incrementSavedCount } from "../../src/db/dailySaveStatsRepo.js";
 import type { AxelorConfig } from "../../src/config/env.js";
 import type { LeadsClientConfig } from "../../src/leads/leadsClient.js";
 import type { AxelorSessionClient } from "../../src/axelor/sessionClient.js";
@@ -557,6 +558,72 @@ describe("createMigrationController", () => {
       const buckets = controller.getErrorAnalytics("2026-07-08");
 
       expect(buckets).toEqual([{ day: "2026-07-08", hour: "09", count: 1, percentage: 100 }]);
+    });
+  });
+
+  describe("getDailyRecordStats", () => {
+    it("merges saved and error counts by day, ascending, when granularity is 'day'", () => {
+      const db = freshDb();
+      const run = createRun(db);
+      incrementSavedCount(db, "2026-07-08");
+      incrementSavedCount(db, "2026-07-08");
+      const error = recordError(db, {
+        runId: run.id,
+        countryCode: "ar",
+        recordOffset: 1,
+        recordIdentifier: null,
+        errorReason: "boom",
+      });
+      db.prepare(`UPDATE import_errors SET created_at = ? WHERE id = ?`).run(
+        "2026-07-09T09:00:00.000Z",
+        error.id,
+      );
+      const controller = createMigrationController(db, fakeDeps(db));
+
+      const stats = controller.getDailyRecordStats("day", 14);
+
+      expect(stats).toEqual([
+        { period: "2026-07-08", saved: 2, error: 0 },
+        { period: "2026-07-09", saved: 0, error: 1 },
+      ]);
+    });
+
+    it("buckets by ISO week when granularity is 'week'", () => {
+      const db = freshDb();
+      // 2026-07-06 is a Monday; 2026-07-08 falls in that same ISO week.
+      incrementSavedCount(db, "2026-07-06");
+      incrementSavedCount(db, "2026-07-08");
+
+      const controller = createMigrationController(db, fakeDeps(db));
+
+      const stats = controller.getDailyRecordStats("week", 8);
+
+      expect(stats).toEqual([{ period: "2026-07-06", saved: 2, error: 0 }]);
+    });
+
+    it("returns only the most recent `limit` buckets", () => {
+      const db = freshDb();
+      incrementSavedCount(db, "2026-07-01");
+      incrementSavedCount(db, "2026-07-02");
+      incrementSavedCount(db, "2026-07-03");
+      const controller = createMigrationController(db, fakeDeps(db));
+
+      const stats = controller.getDailyRecordStats("day", 2);
+
+      expect(stats).toEqual([
+        { period: "2026-07-02", saved: 1, error: 0 },
+        { period: "2026-07-03", saved: 1, error: 0 },
+      ]);
+    });
+
+    it("returns an empty array for limit 0 or a negative limit, instead of `slice(-limit)`'s zero-quirk returning everything", () => {
+      const db = freshDb();
+      incrementSavedCount(db, "2026-07-01");
+      incrementSavedCount(db, "2026-07-02");
+      const controller = createMigrationController(db, fakeDeps(db));
+
+      expect(controller.getDailyRecordStats("day", 0)).toEqual([]);
+      expect(controller.getDailyRecordStats("day", -1)).toEqual([]);
     });
   });
 

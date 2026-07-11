@@ -11,6 +11,7 @@ import {
   markResolved,
   updateErrorReason,
   getErrorAnalytics,
+  getErrorCountsByDay,
 } from "../../src/db/importErrorRepo.js";
 
 const migrationsDir = path.join(process.cwd(), "src", "migrations");
@@ -663,5 +664,74 @@ describe("getErrorAnalytics", () => {
       { day: "2026-07-09", hour: "09", count: 1, percentage: 50 },
       { day: "2026-07-08", hour: "09", count: 1, percentage: 50 },
     ]);
+  });
+});
+
+describe("getErrorCountsByDay", () => {
+  it("returns an empty array for an empty table", () => {
+    const db = freshDb();
+
+    expect(getErrorCountsByDay(db)).toEqual([]);
+  });
+
+  it("groups by UTC day and returns counts in ascending day order", () => {
+    const db = freshDb();
+    const run = createRun(db);
+    const first = recordError(db, {
+      runId: run.id,
+      countryCode: "ar",
+      recordOffset: 1,
+      recordIdentifier: null,
+      errorReason: "boom-1",
+    });
+    const second = recordError(db, {
+      runId: run.id,
+      countryCode: "ar",
+      recordOffset: 2,
+      recordIdentifier: null,
+      errorReason: "boom-2",
+    });
+    const third = recordError(db, {
+      runId: run.id,
+      countryCode: "cl",
+      recordOffset: 3,
+      recordIdentifier: null,
+      errorReason: "boom-3",
+    });
+    setCreatedAt(db, first.id, "2026-07-08T09:10:00.000Z");
+    setCreatedAt(db, second.id, "2026-07-08T14:00:00.000Z");
+    setCreatedAt(db, third.id, "2026-07-09T00:00:00.000Z");
+
+    const counts = getErrorCountsByDay(db);
+
+    expect(counts).toEqual([
+      { day: "2026-07-08", count: 2 },
+      { day: "2026-07-09", count: 1 },
+    ]);
+  });
+
+  it("respects sinceDay, excluding earlier days", () => {
+    const db = freshDb();
+    const run = createRun(db);
+    const first = recordError(db, {
+      runId: run.id,
+      countryCode: "ar",
+      recordOffset: 1,
+      recordIdentifier: null,
+      errorReason: "boom-1",
+    });
+    const second = recordError(db, {
+      runId: run.id,
+      countryCode: "ar",
+      recordOffset: 2,
+      recordIdentifier: null,
+      errorReason: "boom-2",
+    });
+    setCreatedAt(db, first.id, "2026-07-07T09:10:00.000Z");
+    setCreatedAt(db, second.id, "2026-07-08T09:10:00.000Z");
+
+    const counts = getErrorCountsByDay(db, "2026-07-08");
+
+    expect(counts).toEqual([{ day: "2026-07-08", count: 1 }]);
   });
 });
